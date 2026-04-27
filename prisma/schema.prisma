@@ -1,0 +1,458 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════
+// ENUMS
+// ═══════════════════════════════════════════════════════════
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  WITHDRAWN
+}
+
+enum Role {
+  SUPER_ADMIN
+  EXAM_ADMIN
+  GRADING_ADMIN
+  PROCTOR
+  EXPERT
+  EXAMINEE
+}
+
+enum CertType {
+  AXIS
+  AXIS_C
+  AXIS_H
+}
+
+enum CertLevel {
+  L3
+  L2
+  L1
+}
+
+enum ScheduleStatus {
+  UPCOMING
+  REGISTRATION_OPEN
+  REGISTRATION_CLOSED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum RegistrationStatus {
+  PENDING_PAYMENT
+  PAID
+  CANCELLED
+  REFUNDED
+  EXAM_COMPLETED
+}
+
+enum PaymentMethod {
+  CARD
+  VBANK
+  KAKAOPAY
+  NAVERPAY
+  TOSSPAY
+  TRANSFER
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+  PARTIAL_REFUND
+}
+
+enum PenaltyStatus {
+  ACTIVE
+  RELEASED
+}
+
+// ═══════════════════════════════════════════════════════════
+// USER & AUTH
+// ═══════════════════════════════════════════════════════════
+
+model User {
+  id            String        @id @default(cuid())
+  userId        String        @unique @map("user_id")
+  email         String?       @unique
+  passwordHash  String        @map("password_hash")
+  name          String
+  phone         String
+  birthDate     String?       @map("birth_date")
+  gender        String?
+  ci            String?       @unique @db.VarChar(500)
+  di            String?       @db.VarChar(500)
+  niceVerified  Boolean       @default(false) @map("nice_verified")
+  accountStatus AccountStatus @default(ACTIVE) @map("account_status")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  lastLoginAt   DateTime?     @map("last_login_at")
+
+  roles         UserRole[]
+  consents      ConsentLog[]
+  penalties     UserPenalty[]
+  registrations Registration[]
+  examSessions  ExamSession[]
+
+  @@map("users")
+}
+
+model UserRole {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  role      Role
+  grantedBy String?   @map("granted_by")
+  grantedAt DateTime  @default(now()) @map("granted_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@map("user_roles")
+}
+
+model UserPenalty {
+  id            String        @id @default(cuid())
+  userId        String        @map("user_id")
+  sessionId     String?       @map("session_id")
+  reason        String        @db.Text
+  startAt       DateTime      @map("start_at")
+  endAt         DateTime      @map("end_at")
+  decidedBy     String?       @map("decided_by")
+  status        PenaltyStatus @default(ACTIVE)
+  releasedAt    DateTime?     @map("released_at")
+  releaseReason String?       @map("release_reason") @db.Text
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("user_penalties")
+}
+
+model ConsentLog {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  consentType String   @map("consent_type")
+  agreed      Boolean
+  ipAddress   String?  @map("ip_address")
+  userAgent   String?  @map("user_agent") @db.Text
+  consentedAt DateTime @default(now()) @map("consented_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("consent_logs")
+}
+
+model NiceSession {
+  id          String    @id @default(cuid())
+  requestNo   String    @unique @map("request_no")
+  encData     String?   @map("enc_data") @db.Text
+  authType    String    @map("auth_type")
+  status      String    @default("PENDING")
+  resultData  String?   @map("result_data") @db.Text
+  ipAddress   String?   @map("ip_address")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@map("nice_sessions")
+}
+
+// ═══════════════════════════════════════════════════════════
+// CERTIFICATIONS
+// ═══════════════════════════════════════════════════════════
+
+model Certification {
+  id             String   @id @default(cuid())
+  type           CertType @unique
+  name           String
+  nameKo         String   @map("name_ko")
+  description    String   @db.Text
+  targetAudience String   @map("target_audience") @db.Text
+  subjects       Json
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  levels    CertificationLevel[]
+  schedules ExamSchedule[]
+
+  @@map("certifications")
+}
+
+model CertificationLevel {
+  id               String    @id @default(cuid())
+  certId           String    @map("cert_id")
+  level            CertLevel
+  format           String
+  duration         Int
+  questionCount    Int       @map("question_count")
+  fee              Int
+  passScore        Int       @map("pass_score")
+  subjectBreakdown Json      @map("subject_breakdown")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  certification Certification @relation(fields: [certId], references: [id])
+
+  @@unique([certId, level])
+  @@map("certification_levels")
+}
+
+// ═══════════════════════════════════════════════════════════
+// EXAM SCHEDULES
+// ═══════════════════════════════════════════════════════════
+
+model ExamSchedule {
+  id                String         @id @default(cuid())
+  certType          CertType       @map("cert_type")
+  level             CertLevel
+  roundNumber       Int            @map("round_number")
+  year              Int
+  registrationStart DateTime       @map("registration_start")
+  registrationEnd   DateTime       @map("registration_end")
+  examDate          DateTime       @map("exam_date")
+  examStartTime     String         @map("exam_start_time")
+  capacity          Int
+  currentCount      Int            @default(0) @map("current_count")
+  status            ScheduleStatus @default(UPCOMING)
+  venue             String         @default("ONLINE_CBT")
+  venueDetail       String?        @map("venue_detail")
+  isHolidayWarning  Boolean        @default(false) @map("is_holiday_warning")
+  cancelledAt       DateTime?      @map("cancelled_at")
+  cancelReason      String?        @map("cancel_reason") @db.Text
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  certification Certification  @relation(fields: [certType], references: [type])
+  registrations Registration[]
+
+  @@unique([certType, level, year, roundNumber])
+  @@index([status])
+  @@index([examDate])
+  @@map("exam_schedules")
+}
+
+// ═══════════════════════════════════════════════════════════
+// REGISTRATIONS
+// ═══════════════════════════════════════════════════════════
+
+model Registration {
+  id                    String             @id @default(cuid())
+  userId                String             @map("user_id")
+  scheduleId            String             @map("schedule_id")
+  certType              CertType           @map("cert_type")
+  level                 CertLevel
+  status                RegistrationStatus @default(PENDING_PAYMENT)
+  registrationNumber    String?            @unique @map("registration_number")
+  seatNumber            Int?               @map("seat_number")
+  partialExempt         Boolean            @default(false) @map("partial_exempt")
+  exemptSourceSessionId String?            @map("exempt_source_session_id")
+  seatHeldUntil         DateTime?          @map("seat_held_until")
+  cancelledAt           DateTime?          @map("cancelled_at")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  user     User         @relation(fields: [userId], references: [id])
+  schedule ExamSchedule @relation(fields: [scheduleId], references: [id])
+  payments Payment[]
+
+  @@unique([userId, scheduleId])
+  @@index([userId])
+  @@index([scheduleId])
+  @@index([status])
+  @@map("registrations")
+}
+
+// ═══════════════════════════════════════════════════════════
+// PAYMENTS
+// ═══════════════════════════════════════════════════════════
+
+model Payment {
+  id             String         @id @default(cuid())
+  registrationId String         @map("registration_id")
+  orderId        String         @unique @map("order_id")
+  paymentKey     String?        @unique @map("payment_key")
+  amount         Int
+  method         PaymentMethod?
+  status         PaymentStatus  @default(PENDING)
+  approvedAt     DateTime?      @map("approved_at")
+  cancelledAt    DateTime?      @map("cancelled_at")
+  refundAmount   Int?           @map("refund_amount")
+  refundReason   String?        @map("refund_reason") @db.Text
+  rawResponse    Json?          @map("raw_response")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  registration Registration @relation(fields: [registrationId], references: [id])
+
+  @@index([registrationId])
+  @@index([status])
+  @@map("payments")
+}
+
+// ═══════════════════════════════════════════════════════════
+// EXAM ENGINE
+// ═══════════════════════════════════════════════════════════
+
+enum ExamSessionStatus {
+  CREATED
+  IN_PROGRESS
+  SUBMITTED
+  GRADED
+  TERMINATED
+}
+
+enum ExamPart {
+  WRITTEN
+  PRACTICAL
+  DELIVERABLE
+  ESSAY
+}
+
+enum QuestionType {
+  MCQ
+  PRACTICAL_TASK
+  ESSAY
+  DELIVERABLE
+}
+
+model QuestionBank {
+  id            String       @id @default(cuid())
+  certType      CertType     @map("cert_type")
+  level         CertLevel
+  subjectIndex  Int          @map("subject_index")
+  subjectName   String       @map("subject_name")
+  type          QuestionType @default(MCQ)
+  stem          String       @db.Text
+  choices       Json?
+  correctAnswer String?      @map("correct_answer")
+  points        Int          @default(2)
+  qVersion      Int          @default(1) @map("q_version")
+  contentHash   String       @map("content_hash")
+  active        Boolean      @default(true)
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  @@index([certType, level, subjectIndex, active])
+  @@map("question_bank")
+}
+
+model TaskTemplate {
+  id          String   @id @default(cuid())
+  certType    CertType @map("cert_type")
+  level       CertLevel
+  part        ExamPart
+  title       String
+  scenario    String   @db.Text
+  rubric      Json
+  durationMin Int      @map("duration_min")
+  points      Int      @default(20)
+  orderIndex  Int      @default(0) @map("order_index")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([certType, level, part])
+  @@map("task_templates")
+}
+
+model ExamSession {
+  id             String            @id @default(cuid())
+  userId         String            @map("user_id")
+  registrationId String?           @map("registration_id")
+  certType       CertType          @map("cert_type")
+  level          CertLevel
+  attemptNo      Int               @default(1) @map("attempt_no")
+  status         ExamSessionStatus @default(CREATED)
+  paperSeed      String?           @map("paper_seed")
+  startedAt      DateTime?         @map("started_at")
+  hardDeadline   DateTime?         @map("hard_deadline")
+  submittedAt    DateTime?         @map("submitted_at")
+  totalScore     Int?              @map("total_score")
+  writtenScore   Int?              @map("written_score")
+  practicalScore Int?              @map("practical_score")
+  passed         Boolean?
+  failReason     String?           @map("fail_reason") @db.Text
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  user           User            @relation(fields: [userId], references: [id])
+  answers        Answer[]
+  essayAnswers   EssayAnswer[]
+  gradingResults GradingResult[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("exam_sessions")
+}
+
+model Answer {
+  id              String   @id @default(cuid())
+  sessionId       String   @map("session_id")
+  questionId      String   @map("question_id")
+  qVersion        Int      @map("q_version")
+  contentSnapshot Json     @map("content_snapshot")
+  orderIndex      Int      @map("order_index")
+  selectedChoice  String?  @map("selected_choice")
+  flagged         Boolean  @default(false)
+  version         Int      @default(0)
+  isCorrect       Boolean? @map("is_correct")
+  earnedPoints    Int?     @map("earned_points")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, questionId])
+  @@index([sessionId])
+  @@map("answers")
+}
+
+model EssayAnswer {
+  id            String   @id @default(cuid())
+  sessionId     String   @map("session_id")
+  taskId        String   @map("task_id")
+  part          ExamPart
+  contentText   String   @map("content_text") @db.Text
+  aiChatLog     Json?    @map("ai_chat_log")
+  attachmentUrl String?  @map("attachment_url")
+  version       Int      @default(0)
+  earnedPoints  Int?     @map("earned_points")
+  aiPreScore    Int?     @map("ai_pre_score")
+  aiRationale   String?  @map("ai_rationale") @db.Text
+  expertScore   Int?     @map("expert_score")
+  expertNotes   String?  @map("expert_notes") @db.Text
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, taskId])
+  @@index([sessionId])
+  @@map("essay_answers")
+}
+
+model GradingResult {
+  id            String   @id @default(cuid())
+  sessionId     String   @map("session_id")
+  part          ExamPart
+  subjectIndex  Int      @map("subject_index")
+  subjectName   String   @map("subject_name")
+  earned        Int
+  total         Int
+  percentage    Int
+  subjectFailed Boolean  @default(false) @map("subject_failed")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("grading_results")
+}
