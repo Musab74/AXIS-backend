@@ -22,11 +22,14 @@ export interface ExamAssistantResult {
   degraded: boolean;
 }
 
-// The in-exam assistant is the AXIS practical exam's whole point ("AI 활용"),
-// so quality matters — use the flagship model. Thinking is left off (default on
-// 4.8) to keep the interactive turn fast; max_tokens is modest because answers
-// are drafting help, not full essays.
-const MODEL_ID = 'claude-opus-4-8';
+// The in-exam assistant is the AXIS practical exam's whole point ("AI 활용").
+// We use Sonnet here (not Opus) because the assistant handles many cheap,
+// interactive turns per candidate — Opus pricing made this the single biggest
+// line item on our Anthropic bill. Sonnet is more than adequate for drafting
+// help, structure suggestions, and Korean-language polish. The essay grader
+// (separate service) keeps Opus, since grading is one expensive call per
+// submission and quality directly affects legal scoring outcomes.
+const MODEL_ID = 'claude-sonnet-4-6';
 const TIMEOUT_MS = 45_000;
 const MAX_TOKENS = 2048;
 const MAX_HISTORY_TURNS = 20;
