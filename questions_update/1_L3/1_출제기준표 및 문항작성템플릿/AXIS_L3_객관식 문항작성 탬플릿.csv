@@ -1,0 +1,8 @@
+\xEF\xBB\xBFno,cert_type,level,subject,domain_area,q_type,item_purpose,difficulty,content,option_a,option_b,option_c,option_d,correct_answer,points,explanation,source_ref,shuffle_exempt,review_status,review_comment,version,created_by,created_date
+1,AXIS,L3,AI 기본 이해,생성형 AI 개념,multiple_choice,concept,easy,다음 중 생성형 AI의 특징으로 가장 적절한 것은?,학습 데이터를 기반으로 새로운 콘텐츠를 생성한다,기존 데이터를 검색하여 원본을 그대로 보여준다,데이터베이스에서 정답을 찾아 반환한다,사용자가 입력한 내용을 그대로 복사하여 출력한다,A,2,"정답은 A입니다. 생성형 AI는 학습 데이터의 패턴을 바탕으로 새로운 텍스트나 이미지 등을 생성하는 기술입니다. 검색 엔진처럼 원본을 찾아 보여주는 것이 아니라 확률 기반으로 새로운 결과물을 만들어냅니다. 따라서 AI 산출물은 항상 정확성을 검증해야 합니다.",AXIS L3 과목1 생성형AI개념,FALSE,draft,,1,,
+2,AXIS-C,L3,AI 코딩 도구 활용 기초,코드 생성,multiple_choice,code_reading,medium,"다음 Python 코드의 실행 결과로 가장 적절한 것은?
+
+numbers = [10, 20, 30, 40]
+result = sum(numbers) / len(numbers)
+print(result)",10,25.0,100,오류가 발생한다,B,2,"정답은 B입니다. 이 코드는 리스트 numbers의 합계(sum=100)를 요소 개수(len=4)로 나누어 평균값을 구합니다. 100 / 4 = 25.0이 출력됩니다. AI가 생성한 코드를 읽을 때 함수(sum, len)의 역할과 연산 흐름을 파악하는 것이 핵심입니다.",AXIS-C L3 과목2 코드생성,FALSE,draft,,1,,
+3,AXIS-H,L3,의료기관 AI 윤리·보안·저작권,환자정보보호,multiple_choice,ethics_security,easy,"의료기관에서 생성형 AI에 입력해서는 안 되는 정보로 가장 적절한 것은?",환자의 이름과 등록번호,병원의 일반 진료시간 안내,부서별 업무 분장표,공개된 건강보험 제도 안내문,A,2,"정답은 A입니다. 환자의 이름, 등록번호, 진단명, 연락처 등 개인정보는 생성형 AI에 절대 입력해서는 안 됩니다. 이는 개인정보 보호법 및 의료법에 의해 보호되는 민감정보이며, AI 서비스 제공자의 서버에 전송·저장될 수 있어 유출 위험이 있습니다. 병원 일반 안내, 업무 분장표, 공개 제도 안내문은 민감정보가 아니므로 활용이 가능합니다.",AXIS-H L3 과목4 환자정보보호,FALSE,draft,,1,,

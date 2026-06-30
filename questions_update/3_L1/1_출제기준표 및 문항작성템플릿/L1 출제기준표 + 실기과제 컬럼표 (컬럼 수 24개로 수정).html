@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AXIS L1 출제기준표 및 실기과제 컬럼표 v1.1</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Noto Sans KR',sans-serif;color:#1f2937;line-height:1.85;font-size:16.5px;background:#fff}
+.wrap{max-width:900px;margin:0 auto;padding:48px 32px 80px}
+.cover{border-bottom:2px solid #111;padding-bottom:28px;margin-bottom:40px}
+.cover h1{font-size:31px;font-weight:800;color:#111;line-height:1.3;margin-bottom:10px}
+.cover-sub{font-size:16.5px;color:#6b7280;margin-bottom:18px}
+.cover-meta{display:flex;gap:20px;font-size:14px;color:#9ca3af;flex-wrap:wrap}
+h2{font-size:23px;font-weight:800;color:#111;margin:48px 0 18px;padding-bottom:10px;border-bottom:1px solid #e5e7eb}
+h3{font-size:19px;font-weight:700;color:#1f2937;margin:32px 0 12px}
+h4{font-size:17px;font-weight:700;color:#374151;margin:24px 0 8px}
+p{margin-bottom:12px;color:#4b5563}
+strong{color:#1f2937}
+table{width:100%;border-collapse:collapse;margin:14px 0 22px;font-size:15px}
+th{background:#f9fafb;color:#111;border:1px solid #e5e7eb;padding:10px 14px;text-align:left;font-weight:700}
+td{border:1px solid #e5e7eb;padding:10px 14px;color:#4b5563;vertical-align:top}
+th.center,td.center{text-align:center}
+ul{margin:8px 0 16px 22px;color:#4b5563}
+li{margin:5px 0}
+pre{border:1px solid #e5e7eb;padding:14px 16px;font-size:14px;line-height:1.6;overflow-x:auto;margin:12px 0 20px;font-family:Consolas,monospace;color:#1f2937;background:#f9fafb}
+.note{border:1px solid #e5e7eb;border-left:3px solid #2563eb;padding:14px 18px;margin:16px 0;color:#4b5563}
+.note.warn{border-left-color:#d97706}
+.note.ok{border-left-color:#059669}
+.note.danger{border-left-color:#dc2626}
+.part-label{font-size:14px;font-weight:700;color:#2563eb;letter-spacing:2px;text-transform:uppercase;margin:56px 0 8px;padding-top:28px;border-top:2px solid #e5e7eb}
+.req{color:#dc2626;font-weight:700;font-size:14px}
+.rec{color:#d97706;font-weight:700;font-size:14px}
+.opt{color:#6b7280;font-weight:700;font-size:14px}
+.footer{border-top:1px solid #e5e7eb;margin-top:56px;padding-top:20px;color:#9ca3af;font-size:14px;text-align:center}
+@media(max-width:680px){.wrap{padding:28px 16px} h1{font-size:24px} table{font-size:14px}}
+@media print{.wrap{max-width:none;padding:20mm} h2{page-break-before:auto}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="cover">
+  <h1>AXIS L1 출제기준표<br>및 실기과제 컬럼표</h1>
+  <p class="cover-sub">AXIS · AXIS-C · AXIS-H — L1 필기 25문항 + 실기(산출물+서술형) 출제 기준과 과제 작성 양식</p>
+  <div class="cover-meta">
+    <span>㈜AiNex · AiNexEdu</span>
+    <span>v1.1</span>
+    <span>출제위원·검수위원·개발팀 공통 기준</span>
+  </div>
+</header>
+
+
+<!-- ══════════════════════════════════════ -->
+<div class="part-label">Part A — L1 출제기준표</div>
+<!-- ══════════════════════════════════════ -->
+
+<h2>1. L1 공통 기준</h2>
+
+<table>
+  <tr><th style="width:160px">항목</th><th>기준</th></tr>
+  <tr><td><strong>시험 구성</strong></td><td>필기(객관식 25문항) + 실기(파트A 산출물 + 파트B 서술형 3문항)</td></tr>
+  <tr><td><strong>시험 시간</strong></td><td>총 90분 (필기 30분 + 실기 파트A 40분 + 실기 파트B 20분, 연속 시행)</td></tr>
+  <tr><td><strong>필기 배점</strong></td><td>100점 만점 (과목별 배점 상이: 4점/3점/2점)</td></tr>
+  <tr><td><strong>실기 배점</strong></td><td>100점 만점 (파트A 60점 + 파트B 40점)</td></tr>
+  <tr><td><strong>합격 기준</strong></td><td>필기 60점 이상 + 실기 60점 이상</td></tr>
+  <tr><td><strong>필기 과락</strong></td><td>과목별 40% 미만 시 과락</td></tr>
+  <tr><td><strong>부분합격</strong></td><td>필기/실기 중 하나만 합격 시, 12개월 내 1회 합격 과목 면제</td></tr>
+  <tr><td><strong>필기 채점</strong></td><td>정답키 기반 자동채점 (AI API 미사용)</td></tr>
+  <tr><td><strong>실기 채점</strong></td><td>AI 1차 채점 + 전문가 검수 + 관리자 최종 확정</td></tr>
+  <tr><td><strong>실기 AI 도구</strong></td><td>파트A: LMS 내장 AI 사용 가능 / 파트B: AI 사용 불가 (자신의 판단력만으로 서술)</td></tr>
+  <tr><td><strong>유사도 검사</strong></td><td>파트A 제출 시 자동 수행 (70% 이상 전문가 확인, 90% 이상 불합격 검토)</td></tr>
+  <tr><td><strong>실기 출제</strong></td><td>파트A: 시나리오 세트 랜덤 배정 / 파트B: 독립 문제은행 랜덤 출제</td></tr>
+  <tr><td><strong>실기 진행</strong></td><td>파트A → 파트B 순차 진행 (복귀 불가)</td></tr>
+  <tr><td><strong>파트A↔B 관계</strong></td><td>독립 시나리오 (파트A의 결과가 파트B에 영향을 주지 않음)</td></tr>
+  <tr><td><strong>결과 발표</strong></td><td>필기 즉시 / 실기 14일 이내</td></tr>
+  <tr><td><strong>응시 요건</strong></td><td>L2 취득자 또는 관리자 경력 증빙</td></tr>
+</table>
+
+<div class="note ok">
+  <strong>L2 대비 차이:</strong> L1은 "조직에 AI를 도입하고 이끄는 사람"을 대상으로 한다. 실기가 L2(3과제 45분, AI 사용)와 완전히 다르다. 파트A에서는 AI를 활용해 AX 실행계획서를 작성하고, 파트B에서는 AI 없이 본인의 전략적 판단력을 서술형으로 평가한다.
+</div>
+
+<div class="note">
+  <strong>파트B AI 미사용 근거:</strong> L1은 "리더"를 평가하는 등급이다. AI 도구가 없는 상황에서도 조직의 AI 도입·운영에 대해 논리적으로 판단·설계할 수 있어야 하므로, 파트B는 AI 없이 본인의 사고력만으로 서술한다. 파트A에서 이미 AI 활용 능력을 평가했으므로, 파트B는 전략적 판단 자체를 검증하는 역할이다.
+</div>
+
+<h3>L1 필기 난이도 비율</h3>
+<table>
+  <tr><th>난이도</th><th class="center">비율</th><th class="center">문항 수</th><th>출제 방향</th></tr>
+  <tr><td><strong>하 (easy)</strong></td><td class="center">15%</td><td class="center">4</td><td>전략 수립의 기본 개념</td></tr>
+  <tr><td><strong>중 (medium)</strong></td><td class="center">50%</td><td class="center">12</td><td>조직 도입 시나리오 기반 판단</td></tr>
+  <tr><td><strong>상 (hard)</strong></td><td class="center">35%</td><td class="center">9</td><td>복합 리스크, ROI 판단, 거버넌스 설계</td></tr>
+</table>
+
+<div class="note">
+  <strong>등급별 난이도 비교:</strong> L3(하40/중45/상15) → L2(하25/중55/상20) → L1(하15/중50/상35). 25문항의 한계로 실제 배분은 하16%/중48%/상36%이며 ±1~2% 오차는 허용한다.
+</div>
+
+<h3>L1 필기 문항유형 비율</h3>
+<table>
+  <tr><th>문항유형</th><th class="center">비율</th><th class="center">문항 수</th><th>설명</th></tr>
+  <tr><td>사례판단형 (case_judgment)</td><td class="center">40%</td><td class="center">10</td><td>조직 상황에서 AI 도입·운영 관련 최적 판단</td></tr>
+  <tr><td>전략·거버넌스형 (governance)</td><td class="center">35%</td><td class="center">8~9</td><td>AI 정책 수립, 리스크 관리, ROI, 변화관리</td></tr>
+  <tr><td>개념이해형 (concept)</td><td class="center">15%</td><td class="center">3~4</td><td>전략 수립에 필요한 핵심 개념</td></tr>
+  <tr><td>윤리·보안판단형 (ethics_security)</td><td class="center">10%</td><td class="center">2~3</td><td>보안·윤리·법규 판단</td></tr>
+</table>
+
+<div class="note">
+  <strong>L1 문항유형 특징:</strong> L3·L2와 달리 사례판단형과 전략·거버넌스형이 전체의 75%를 차지한다. 단순 개념이나 도구 사용이 아니라 "조직 차원의 의사결정"이 핵심이다.
+</div>
+
+
+<!-- ═══ AXIS L1 ═══ -->
+<h2>2. AXIS L1 출제기준표</h2>
+
+<h3>필기 (25문항, 100점, 30분)</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">배점</th><th>세부 출제영역</th></tr>
+  <tr><td><strong>AI 도입 전략·ROI</strong></td><td class="center">12</td><td class="center">48점<br><span style="font-size:13px;color:#6b7280">(문항당 4점)</span></td><td>업무 분석(어디에·왜), AI 도입 우선순위 판단, ROI·KPI 설계, 도입 사례 평가, 실패 요인 분석</td></tr>
+  <tr><td><strong>AX 프로젝트 기획·실행</strong></td><td class="center">8</td><td class="center">24점<br><span style="font-size:13px;color:#6b7280">(문항당 3점)</span></td><td>AX 프로젝트 단계(As-Is→To-Be→파일럿→확산), 팀원 AI 활용 지원·교육, 변화관리, 성과 측정</td></tr>
+  <tr><td><strong>AI 거버넌스·리스크</strong></td><td class="center">5</td><td class="center">10점<br><span style="font-size:13px;color:#6b7280">(문항당 2점)</span></td><td>AI 사용 정책 수립, 보안·윤리 가이드라인, 인공지능기본법 의무, 사고 대응 절차</td></tr>
+</table>
+
+<h4>필기 과목별 난이도 배분 가이드 (3개 자격 공통 구조)</h4>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">하</th><th class="center">중</th><th class="center">상</th></tr>
+  <tr><td><strong>과목1 (12문항)</strong></td><td class="center">12</td><td class="center">2</td><td class="center">6</td><td class="center">4</td></tr>
+  <tr><td><strong>과목2 (8문항)</strong></td><td class="center">8</td><td class="center">1</td><td class="center">4</td><td class="center">3</td></tr>
+  <tr><td><strong>과목3 (5문항)</strong></td><td class="center">5</td><td class="center">1</td><td class="center">2</td><td class="center">2</td></tr>
+  <tr><td><strong>합계</strong></td><td class="center"><strong>25</strong></td><td class="center"><strong>4</strong></td><td class="center"><strong>12</strong></td><td class="center"><strong>9</strong></td></tr>
+</table>
+
+<h4>필기 과락 기준 (3개 자격 공통)</h4>
+<table>
+  <tr><th>과목</th><th class="center">만점</th><th class="center">과락 컷</th><th>의미</th></tr>
+  <tr><td>과목1 (4점×12문항)</td><td class="center">48점</td><td class="center"><strong>20점 미만</strong></td><td>4문항 이하 정답 시 과락 (5문항 20점 = 41.7% → 통과)</td></tr>
+  <tr><td>과목2 (3점×8문항)</td><td class="center">24점</td><td class="center"><strong>10점 미만</strong></td><td>3문항 이하 정답 시 과락 (4문항 12점 = 50% → 통과)</td></tr>
+  <tr><td>과목3 (2점×5문항)</td><td class="center">10점</td><td class="center"><strong>4점 미만</strong></td><td>1문항 이하 정답 시 과락 (2문항 4점 = 40% → 통과)</td></tr>
+</table>
+
+<h3>실기 (파트A + 파트B, 100점, 60분)</h3>
+<table>
+  <tr><th>파트</th><th class="center">배점</th><th class="center">시간</th><th>평가 내용</th><th>AI 사용</th></tr>
+  <tr><td><strong>파트 A<br>AX 실행계획서</strong></td><td class="center">60점</td><td class="center">40분</td><td>주어진 시나리오의 조직에 AI를 도입하는 실행계획서 작성</td><td><strong>사용 가능</strong></td></tr>
+  <tr><td><strong>파트 B<br>시나리오 서술형</strong></td><td class="center">40점</td><td class="center">20분</td><td>AI 도입·운영 시나리오에 대한 의사결정 서술형 3문항 (파트A와 독립 시나리오)</td><td><strong>사용 불가</strong></td></tr>
+</table>
+
+<h4>AXIS 파트A 루브릭 (60점)</h4>
+<table>
+  <tr><th>평가 항목</th><th class="center">배점</th><th>평가 기준</th></tr>
+  <tr><td>현황 분석·과제 선정</td><td class="center">12점</td><td>조직 현황을 파악하고 AI 도입이 가장 효과적인 업무를 선정했는가?</td></tr>
+  <tr><td>AI 활용 전략</td><td class="center">15점</td><td>어떤 AI를 왜, 어떻게 활용할지 구체적인가? 도구 선택의 근거가 있는가?</td></tr>
+  <tr><td>실행 로드맵</td><td class="center">12점</td><td>파일럿→확산 단계가 현실적인가? 일정·담당·KPI가 포함되었는가?</td></tr>
+  <tr><td>리스크·거버넌스</td><td class="center">8점</td><td>보안·윤리·법규 리스크를 식별하고 대응책을 제시했는가?</td></tr>
+  <tr><td>ROI·성과 측정</td><td class="center">8점</td><td>정량적 기대효과와 측정 방법이 제시되었는가?</td></tr>
+  <tr><td>AI 활용 과정</td><td class="center">5점</td><td>계획서 작성에 AI를 효과적으로 활용했는가? 프롬프트 로그의 질</td></tr>
+</table>
+
+<h4>AXIS 파트B 루브릭 (40점, 3문항)</h4>
+<table>
+  <tr><th>문항</th><th class="center">배점</th><th>평가 방향</th><th>AI 채점 역할</th><th>전문가 역할</th></tr>
+  <tr><td>문항 1 — 도입 판단</td><td class="center">15점</td><td>AI 도입 여부·우선순위를 논리적으로 판단</td><td>핵심 키워드 포함 여부, 논리 구조 1차 판별</td><td>논리성·현실성 점수 직접 부여</td></tr>
+  <tr><td>문항 2 — 문제 해결</td><td class="center">13점</td><td>저항·실패·윤리 이슈에 대한 현실적 해결책</td><td>핵심 키워드 포함 여부, 구체성 1차 판별</td><td>현실성·실행가능성 점수 직접 부여</td></tr>
+  <tr><td>문항 3 — 거버넌스 설계</td><td class="center">12점</td><td>AI 사용 정책·가이드라인·사고 대응 설계</td><td>필수 항목 포함 여부 1차 판별</td><td>정책 품질·완성도 점수 직접 부여</td></tr>
+</table>
+
+<div class="note">
+  <strong>서술형 AI 채점 역할 분담:</strong> 서술형은 정답이 하나로 고정되지 않으므로, AI는 "핵심 키워드 포함 여부"와 "논리 구조" 정도만 1차 판별하고, "논리성·현실성·실행가능성" 점수는 전문가가 직접 부여한다. AI confidence가 0.7 미만이면 자동으로 전문가 필수 검수 대상이 된다.
+</div>
+
+
+<!-- ═══ AXIS-C L1 ═══ -->
+<h2>3. AXIS-C L1 출제기준표</h2>
+
+<h3>필기 (25문항, 100점, 30분)</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">배점</th><th>세부 출제영역</th></tr>
+  <tr><td><strong>AI 코딩 도입 전략·ROI</strong></td><td class="center">12</td><td class="center">48점<br><span style="font-size:13px;color:#6b7280">(문항당 4점)</span></td><td>조직 업무 자동화 후보 선정, AI 코딩 도구 도입 ROI, 자체 개발 vs AI 코딩 판단, 시민 개발자 육성</td></tr>
+  <tr><td><strong>AI 코딩 운영체계 수립</strong></td><td class="center">8</td><td class="center">24점<br><span style="font-size:13px;color:#6b7280">(문항당 3점)</span></td><td>AI 코딩 파이프라인 설계, 코드리뷰 기준·프로세스, 버전 관리, 팀 교육 체계</td></tr>
+  <tr><td><strong>AI 코딩 보안·거버넌스</strong></td><td class="center">5</td><td class="center">10점<br><span style="font-size:13px;color:#6b7280">(문항당 2점)</span></td><td>코드 보안 정책, 라이선스 관리, 개인정보 처리, 인공지능기본법, 사고 대응</td></tr>
+</table>
+
+<h3>실기 (파트A + 파트B, 100점, 60분)</h3>
+<table>
+  <tr><th>파트</th><th class="center">배점</th><th class="center">시간</th><th>평가 내용</th><th>AI 사용</th></tr>
+  <tr><td><strong>파트 A<br>AI 코딩 도입 실행계획서</strong></td><td class="center">60점</td><td class="center">40분</td><td>조직에 AI 코딩 도구를 도입하는 실행계획서 (운영체계·보안·교육)</td><td><strong>사용 가능</strong></td></tr>
+  <tr><td><strong>파트 B<br>시나리오 서술형</strong></td><td class="center">40점</td><td class="center">20분</td><td>AI 코딩 도입·운영 시나리오 의사결정 3문항 (파트A와 독립)</td><td><strong>사용 불가</strong></td></tr>
+</table>
+
+<h4>AXIS-C 파트A 루브릭 (60점)</h4>
+<table>
+  <tr><th>평가 항목</th><th class="center">배점</th><th>평가 기준</th></tr>
+  <tr><td>자동화 후보 분석</td><td class="center">12점</td><td>반복 업무를 식별하고 AI 코딩으로 자동화할 대상을 선정했는가?</td></tr>
+  <tr><td>도구·기술 전략</td><td class="center">15점</td><td>도구 선정 근거, 기술 스택, 시민 개발자 vs 개발자 역할 구분이 명확한가?</td></tr>
+  <tr><td>실행 로드맵</td><td class="center">12점</td><td>파일럿→확산 단계, 일정·담당·KPI가 현실적인가?</td></tr>
+  <tr><td>보안·거버넌스</td><td class="center">10점</td><td>코드 보안 정책, 코드리뷰 기준, 라이선스 관리가 포함되었는가?</td></tr>
+  <tr><td>ROI·성과 측정</td><td class="center">6점</td><td>자동화 전후 비교, 시간 절감·오류 감소 등 정량 기대효과</td></tr>
+  <tr><td>AI 활용 과정</td><td class="center">5점</td><td>계획서 작성에 AI를 효과적으로 활용했는가?</td></tr>
+</table>
+
+<h4>AXIS-C 파트B 루브릭 (40점, 3문항)</h4>
+<table>
+  <tr><th>문항</th><th class="center">배점</th><th>평가 방향</th></tr>
+  <tr><td>문항 1 — 도입 판단</td><td class="center">15점</td><td>AI 코딩 도입 여부·범위·우선순위를 논리적으로 판단했는가?</td></tr>
+  <tr><td>문항 2 — 문제 해결</td><td class="center">13점</td><td>코드 품질 문제, 보안 사고, 팀 저항 등에 대한 해결책이 현실적인가?</td></tr>
+  <tr><td>문항 3 — 운영체계 설계</td><td class="center">12점</td><td>코드리뷰·배포·보안 점검 체계를 설계할 수 있는가?</td></tr>
+</table>
+
+<div class="note">
+  <strong>AXIS-C L1 특이점:</strong> 파트A에서 코드를 직접 작성하지 않는다. "코딩을 하는 사람"이 아니라 "AI 코딩 도입을 이끄는 사람"을 평가하므로, 전략·운영체계·거버넌스가 핵심이다.
+</div>
+
+
+<!-- ═══ AXIS-H L1 ═══ -->
+<h2>4. AXIS-H L1 출제기준표</h2>
+
+<h3>필기 (25문항, 100점, 30분)</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">배점</th><th>세부 출제영역</th></tr>
+  <tr><td><strong>의료기관 AI 도입 전략</strong></td><td class="center">12</td><td class="center">48점<br><span style="font-size:13px;color:#6b7280">(문항당 4점)</span></td><td>부서별 AI 도입 우선순위, 비임상 업무 분석, ROI·KPI 설계, 의료기관 특수성(인증·평가·규제)</td></tr>
+  <tr><td><strong>의료기관 AX 프로젝트 기획·실행</strong></td><td class="center">8</td><td class="center">24점<br><span style="font-size:13px;color:#6b7280">(문항당 3점)</span></td><td>부서간 AI 활용 통합, 변화관리(의료기관 조직문화), 직원 교육, QI(질 향상) 연계</td></tr>
+  <tr><td><strong>의료기관 AI 거버넌스·컴플라이언스</strong></td><td class="center">5</td><td class="center">10점<br><span style="font-size:13px;color:#6b7280">(문항당 2점)</span></td><td>환자정보보호 정책, 의료윤리위원회 연계, 인공지능기본법·개인정보보호법, 의료행위 경계 관리</td></tr>
+</table>
+
+<h3>실기 (파트A + 파트B, 100점, 60분)</h3>
+<table>
+  <tr><th>파트</th><th class="center">배점</th><th class="center">시간</th><th>평가 내용</th><th>AI 사용</th></tr>
+  <tr><td><strong>파트 A<br>의료기관 AX 실행계획서</strong></td><td class="center">60점</td><td class="center">40분</td><td>의료기관에 AI를 도입하는 실행계획서 (비임상 업무 한정)</td><td><strong>사용 가능</strong></td></tr>
+  <tr><td><strong>파트 B<br>시나리오 서술형</strong></td><td class="center">40점</td><td class="center">20분</td><td>의료기관 AI 도입·운영 시나리오 의사결정 3문항 (파트A와 독립)</td><td><strong>사용 불가</strong></td></tr>
+</table>
+
+<h4>AXIS-H 파트A 루브릭 (60점)</h4>
+<table>
+  <tr><th>평가 항목</th><th class="center">배점</th><th>평가 기준</th></tr>
+  <tr><td>현황 분석·과제 선정</td><td class="center">10점</td><td>의료기관 현황을 파악하고 비임상 AI 도입 대상을 선정했는가?</td></tr>
+  <tr><td>AI 활용 전략</td><td class="center">12점</td><td>부서별 AI 활용 방안이 구체적인가? 의료기관 특수성을 반영했는가?</td></tr>
+  <tr><td>실행 로드맵</td><td class="center">10점</td><td>파일럿→확산, 일정·담당·KPI가 현실적인가?</td></tr>
+  <tr><td>거버넌스·컴플라이언스</td><td class="center">12점</td><td>환자정보보호 정책, 의료윤리위원회 연계, 사고 대응이 포함되었는가?</td></tr>
+  <tr><td>ROI·성과 측정</td><td class="center">6점</td><td>정량적 기대효과가 의료기관 맥락에 맞는가?</td></tr>
+  <tr><td>AI 활용 과정</td><td class="center">5점</td><td>계획서 작성에 AI를 효과적으로 활용했는가?</td></tr>
+  <tr><td>의료 안전·면책</td><td class="center">5점</td><td>비임상 한정 명시, 의료행위 오인 방지, 면책 문구 포함 여부</td></tr>
+</table>
+
+<h4>AXIS-H 파트B 루브릭 (40점, 3문항)</h4>
+<table>
+  <tr><th>문항</th><th class="center">배점</th><th>평가 방향</th></tr>
+  <tr><td>문항 1 — 도입 판단</td><td class="center">15점</td><td>의료기관 맥락에서 AI 도입 여부·우선순위를 논리적으로 판단했는가?</td></tr>
+  <tr><td>문항 2 — 문제 해결</td><td class="center">13점</td><td>환자정보 유출, 의료윤리 위반, 직원 저항에 대한 해결책이 현실적인가?</td></tr>
+  <tr><td>문항 3 — 거버넌스 설계</td><td class="center">12점</td><td>환자정보보호 정책, AI 사용 가이드라인, 사고 대응 절차를 설계할 수 있는가?</td></tr>
+</table>
+
+<div class="note danger">
+  <strong>AXIS-H L1 절대 원칙:</strong> 파트A·파트B 모두 비임상 업무에 한정. 임상 AI 도입 계획이 포함되면 "의료 안전·면책" 0점 및 불합격 검토 대상.
+</div>
+
+
+<!-- ══════════════════════════════════════ -->
+<div class="part-label">Part B — 컬럼표 안내</div>
+<!-- ══════════════════════════════════════ -->
+
+<h2>5. L1 필기 객관식 컬럼표</h2>
+<p>L3 컬럼표를 그대로 사용합니다. 차이점만 정리합니다.</p>
+
+<table>
+  <tr><th>컬럼</th><th>L3</th><th>L1 차이점</th></tr>
+  <tr><td><strong>level</strong></td><td>L3</td><td><strong>L1</strong></td></tr>
+  <tr><td><strong>q_type</strong></td><td>multiple_choice만</td><td>multiple_choice + <strong>scenario</strong> (대부분 시나리오 기반)</td></tr>
+  <tr><td><strong>item_purpose</strong></td><td>L3용 7가지</td><td>주로 <strong>case_judgment</strong>(40%) + <strong>governance</strong>(35%) 사용</td></tr>
+  <tr><td><strong>points</strong></td><td>전 문항 2점</td><td><strong>과목별 상이</strong> (4점/3점/2점)</td></tr>
+  <tr><td><strong>subject</strong></td><td>L3 과목명</td><td><strong>L1 과목명</strong></td></tr>
+</table>
+
+
+<h2>6. L1 실기과제 컬럼표</h2>
+<p>L2 실기과제 컬럼표(24개 컬럼)를 그대로 사용합니다. 차이점만 정리합니다.</p>
+
+<table>
+  <tr><th>컬럼</th><th>L2</th><th>L1 차이점</th></tr>
+  <tr><td><strong>level</strong></td><td>L2</td><td><strong>L1</strong></td></tr>
+  <tr><td><strong>task_type</strong></td><td>task_a / task_b / task_c</td><td><strong>part_a</strong> (산출물) / <strong>part_b</strong> (서술형)</td></tr>
+  <tr><td><strong>time_limit</strong></td><td>12~20분 (합산 45분)</td><td><strong>파트A 40분 / 파트B 20분</strong> (합산 60분)</td></tr>
+  <tr><td><strong>max_score</strong></td><td>30~40점</td><td><strong>파트A 60점 / 파트B 40점</strong></td></tr>
+  <tr><td><strong>ai_tool_allowed</strong></td><td>LMS 내장 AI</td><td><strong>파트A: LMS 내장 AI / 파트B: 없음</strong></td></tr>
+</table>
+
+<h4>파트B 서술형 문항 작성 시</h4>
+<p>scenario_content에 3문항을 모두 기재합니다.</p>
+<pre>[문항1] 당신은 ㈜가나의 DX팀장입니다. CEO가 "모든 부서에 AI를 도입하라"고 지시했습니다. 
+전사 동시 도입과 시범 부서 우선 도입 중 어떤 전략을 선택할지, 근거와 함께 서술하세요. (15점)
+
+[문항2] 시범 도입 후 영업팀에서 "AI가 우리 일을 대체할 것"이라는 저항이 발생했습니다. 
+팀장으로서 어떻게 대응할지 구체적인 조치를 서술하세요. (13점)
+
+[문항3] 조직의 AI 사용 정책을 만들어야 합니다. 
+최소 포함해야 할 항목 5가지와 각 항목의 핵심 기준을 서술하세요. (12점)</pre>
+
+<div class="note">
+  <strong>서술형 모범답안 작성 방식:</strong> 정답이 하나로 고정되지 않으므로, model_answer에는 "모범 방향"을 작성하고 핵심 키워드 목록(예: "파일럿, 단계적 확산, 성과 측정, 변화관리")을 병기한다. AI 채점은 키워드 포함 여부와 논리 구조를 1차 판별하고, 전문가가 최종 점수를 부여한다.
+</div>
+
+
+<!-- ══════════════════════════════════════ -->
+<div class="part-label">Part C — 검수·운영</div>
+<!-- ══════════════════════════════════════ -->
+
+<h2>7. 검수 기준표</h2>
+<table>
+  <tr><th>검수 항목</th><th>확인 기준</th></tr>
+  <tr><td><strong>시나리오 현실성</strong></td><td>관리자·팀장 수준에서 실제 직면할 수 있는 상황인가?</td></tr>
+  <tr><td><strong>요구 산출물 명확성</strong></td><td>실행계획서에 포함해야 할 항목이 명확한가?</td></tr>
+  <tr><td><strong>루브릭 배점 일치</strong></td><td>파트A 항목 합계 = 60점, 파트B 문항 합계 = 40점인가?</td></tr>
+  <tr><td><strong>서술형 키워드 정의</strong></td><td>모범답안에 핵심 키워드 목록이 포함되었는가?</td></tr>
+  <tr><td><strong>난이도 적정성</strong></td><td>파트A 40분, 파트B 20분(3문항) 내 수행 가능한가?</td></tr>
+  <tr><td><strong>유사도 차별성</strong></td><td>파트A 시나리오가 충분히 차별화되어 표절 판별이 가능한가?</td></tr>
+  <tr><td><strong>파트A↔B 독립성</strong></td><td>파트B가 파트A 결과에 의존하지 않는 독립 시나리오인가?</td></tr>
+  <tr><td><strong>AXIS-C 전용</strong></td><td>코드 작성이 아닌 전략·거버넌스를 평가하는가?</td></tr>
+  <tr><td><strong>AXIS-H 전용</strong></td><td>비임상 한정인가? 면책·거버넌스 항목이 루브릭에 포함되었는가?</td></tr>
+</table>
+
+
+<h2>8. 과제 세트 구축 목표</h2>
+<table>
+  <tr><th>자격</th><th class="center">파트A 시나리오</th><th class="center">파트B 문항</th><th>비고</th></tr>
+  <tr><td><strong>AXIS L1</strong></td><td class="center">20세트</td><td class="center">60문항+ (20세트)</td><td>업종·규모별 다양한 조직 시나리오</td></tr>
+  <tr><td><strong>AXIS-C L1</strong></td><td class="center">20세트</td><td class="center">60문항+ (20세트)</td><td>AI 코딩 도입·운영 시나리오</td></tr>
+  <tr><td><strong>AXIS-H L1</strong></td><td class="center">15세트</td><td class="center">45문항+ (15세트)</td><td>의료기관 유형별 (종합·전문·요양)</td></tr>
+</table>
+
+<div class="note warn">
+  <strong>문항 노출 관리:</strong> 파트B가 독립 출제이므로, 파트A 20세트와 파트B 20세트가 항상 같은 조합으로 나가지 않도록 랜덤 조합한다. 이를 통해 실질적인 조합 수를 늘려 문항 노출을 지연시킨다.
+</div>
+
+
+<h2>9. 3개 등급 설계 문서 완성 현황</h2>
+<table>
+  <tr><th>문서</th><th class="center">상태</th><th>파일명</th></tr>
+  <tr><td>L3 출제기준표 + 객관식 컬럼표</td><td class="center">✅ v1.1</td><td>AXIS_L3_Blueprint_v1_1.html</td></tr>
+  <tr><td>L3 객관식 CSV 템플릿</td><td class="center">✅ v1.1</td><td>AXIS_L3_Template_v1_1.csv</td></tr>
+  <tr><td>L2 출제기준표 + 실기과제 컬럼표</td><td class="center">✅ v1.1</td><td>AXIS_L2_Blueprint_v1_1.html</td></tr>
+  <tr><td>L2 실기과제 CSV 템플릿</td><td class="center">✅ v1.1</td><td>AXIS_L2_Task_Template_v1_1.csv</td></tr>
+  <tr><td>L1 출제기준표 + 실기과제 컬럼표</td><td class="center">✅ v1.1</td><td>AXIS_L1_Blueprint_v1_1.html (본 문서)</td></tr>
+</table>
+
+<div class="note ok">
+  <strong>설계 단계 완료:</strong> 3개 등급(L3·L2·L1)의 출제기준표와 컬럼표가 모두 완성되었습니다. 다음 단계는 실행(L3 샘플 20문항 작성)입니다.
+</div>
+
+
+<footer class="footer">
+  ㈜AiNex · AiNexEdu · L1 출제기준표 및 실기과제 컬럼표 v1.1
+</footer>
+
+</div>
+</body>
+</html>

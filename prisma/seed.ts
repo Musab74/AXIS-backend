@@ -1,4 +1,6 @@
 import { PrismaClient, CertType, CertLevel } from '@prisma/client';
+import { seedDesignContent } from './seed-content-design';
+import { main as seedQuestionsFromCsv } from './seed-questions-csv';
 
 const prisma = new PrismaClient();
 
@@ -43,7 +45,7 @@ async function main() {
       format: 'CBT 객관식 + 실기 (AI 활용 과제)',
       duration: 120,
       questionCount: 40,
-      fee: 150000,
+      fee: 200000,
       passScore: 60,
       subjectBreakdown: { '필기-AI 심화': 15, '필기-프롬프트 고급': 15, '필기-업무 적용': 10, '실기-AI 활용 과제': 1 },
     },
@@ -58,7 +60,7 @@ async function main() {
       format: 'CBT 필기 + 실기 + 에세이',
       duration: 180,
       questionCount: 30,
-      fee: 200000,
+      fee: 300000,
       passScore: 60,
       subjectBreakdown: { '필기-AI 전략': 10, '필기-조직 혁신': 10, '필기-윤리 거버넌스': 10, '실기-종합 프로젝트': 1, '에세이': 1 },
     },
@@ -102,7 +104,7 @@ async function main() {
       format: 'CBT 객관식 + 코드 실기 (Judge0 샌드박스)',
       duration: 120,
       questionCount: 40,
-      fee: 150000,
+      fee: 200000,
       passScore: 60,
       subjectBreakdown: { '필기-AI 코딩 심화': 15, '필기-아키텍처': 15, '필기-자동화': 10, '실기-코드 과제': 1 },
     },
@@ -117,7 +119,7 @@ async function main() {
       format: 'CBT 필기 + 코드 실기 + 에세이',
       duration: 180,
       questionCount: 30,
-      fee: 200000,
+      fee: 300000,
       passScore: 60,
       subjectBreakdown: { '필기-시스템 설계': 10, '필기-AI 엔지니어링': 10, '필기-보안·거버넌스': 10, '실기-프로젝트': 1, '에세이': 1 },
     },
@@ -161,7 +163,7 @@ async function main() {
       format: 'CBT 객관식 + 실기 (의료 AI 활용 과제)',
       duration: 120,
       questionCount: 40,
-      fee: 150000,
+      fee: 200000,
       passScore: 60,
       subjectBreakdown: { '필기-의료 AI 심화': 15, '필기-데이터 분석': 15, '필기-규제·보안': 10, '실기-의료 AI 과제': 1 },
     },
@@ -176,13 +178,20 @@ async function main() {
       format: 'CBT 필기 + 실기 + 에세이',
       duration: 180,
       questionCount: 30,
-      fee: 200000,
+      fee: 300000,
       passScore: 60,
       subjectBreakdown: { '필기-의료 AI 전략': 10, '필기-병원 혁신': 10, '필기-거버넌스': 10, '실기-프로젝트': 1, '에세이': 1 },
     },
   });
 
   console.log('Seeded 3 certifications × 3 levels = 9 records');
+
+  await seedDesignContent(prisma);
+
+  // Real authored question bank + practical tasks (canonical source = questions/*.csv).
+  // Replaces the synthetic seed-exam.ts path so every environment gets live content.
+  console.log('Seeding question bank & practical tasks from CSV...');
+  await seedQuestionsFromCsv();
 }
 
 main()

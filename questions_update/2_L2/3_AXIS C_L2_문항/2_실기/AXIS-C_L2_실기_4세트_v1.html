@@ -1,0 +1,602 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AXIS-C L2 실기 4세트 v1</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Noto Sans KR',monospace,sans-serif;color:#1f2937;line-height:1.8;font-size:15px;background:#fff}.wrap{max-width:900px;margin:0 auto;padding:48px 32px 80px}.cover{border-bottom:2px solid #111;padding-bottom:24px;margin-bottom:32px}.cover h1{font-size:28px;font-weight:800}.cover-sub{font-size:15px;color:#6b7280;margin-top:6px}h2{font-size:22px;font-weight:800;margin:40px 0 16px;padding:12px 16px;background:#f0fdf4;border-left:4px solid #059669;border-radius:0 8px 8px 0}h3{font-size:18px;font-weight:700;color:#059669;margin:28px 0 10px}h4{font-size:15px;font-weight:700;margin:16px 0 6px;padding:6px 10px;background:#f9fafb;border-radius:6px}p{margin-bottom:8px;color:#4b5563}pre{background:#f8fafc;border:1px solid #e2e8f0;padding:14px;border-radius:8px;font-size:13px;line-height:1.7;white-space:pre-wrap;margin:8px 0 16px;font-family:Consolas,'Noto Sans KR',monospace}table{width:100%;border-collapse:collapse;margin:10px 0 18px;font-size:14px}th{background:#064e3b;color:#fff;padding:8px 12px;text-align:left}td{border:1px solid #e5e7eb;padding:8px 12px;vertical-align:top}.set-divider{border-top:3px solid #064e3b;margin:56px 0 32px}.badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;color:#fff}.badge-a{background:#059669}.badge-b{background:#d97706}.badge-c{background:#7c3aed}.score{font-size:14px;font-weight:700;color:#dc2626}.note{border-left:3px solid #059669;padding:10px 14px;margin:10px 0;background:#f0fdf4;font-size:14px;border-radius:0 6px 6px 0}.footer{border-top:1px solid #e5e7eb;margin-top:48px;padding-top:16px;color:#9ca3af;font-size:13px;text-align:center}@media print{.set-divider{page-break-before:always}}</style></head><body><div class="wrap">
+<header class="cover"><h1>AXIS-C L2 실기 과제 세트</h1>
+<p class="cover-sub">4세트 × 3과제 = 12과제 | AI 코딩 실기 | CSV + HTML</p>
+<p style="font-size:13px;color:#9ca3af;margin-top:8px">㈜AiNex · AiNexEdu · v1</p></header>
+<div class="set-divider"></div><h2>세트 1 — CSV 매출 데이터 자동화</h2>
+<h3><span class="badge badge-a">과제 A</span> 자동화 스크립트 구현 <span class="score">(35점, 15분)</span></h3>
+<h4>📋 시나리오</h4><pre>당신은 ㈜가나다 기획팀 직원입니다. 매주 제출하는 "주간 매출 정리" 작업을 자동화하고 싶습니다. 아래 조건에 맞는 Python 스크립트를 AI 코딩 도구를 활용하여 작성하세요.
+
+[기능 요구사항]
+1. sales_weekly.csv 파일을 읽어 제품별 매출 합계를 계산
+2. 매출 상위 3개 제품을 추출
+3. 전주 대비 증감률을 계산 (prev_sales_weekly.csv와 비교)
+4. 결과를 report.csv로 저장
+5. 에러 발생 시 로그 파일(error.log)에 기록</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[sales_weekly.csv 구조]
+date,product,region,amount
+2026-06-01,제품A,서울,1500000
+2026-06-01,제품B,부산,800000
+...
+
+[prev_sales_weekly.csv] 동일 구조 (전주 데이터)
+[출력: report.csv] product,total_amount,rank,change_rate</pre>
+<h4>📝 요구 산출물</h4><p>완성된 Python 코드, 프롬프트 로그(AI에 요청한 내용), 실행 결과 스크린샷 또는 출력 로그</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>코드 실행 성공</strong></td><td>15점</td><td>요구 기능이 실제로 작동하는가?</td></tr>
+<tr><td><strong>요구사항 충족</strong></td><td>8점</td><td>시나리오 요구사항을 빠짐없이 구현했는가?</td></tr>
+<tr><td><strong>코드 품질</strong></td><td>5점</td><td>가독성·구조화·에러 처리</td></tr>
+<tr><td><strong>프롬프트 설계</strong></td><td>4점</td><td>체계적 프롬프트로 AI를 활용했는가?</td></tr>
+<tr><td><strong>보안 준수</strong></td><td>3점</td><td>API키 노출·금지 패턴 여부</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[프롬프트]
+"pandas를 사용하여 CSV 매출 데이터를 처리하는 Python 스크립트를 작성해줘. 기능: ①sales_weekly.csv 읽기 ②제품별 매출 합계(groupby) ③상위 3개 추출 ④prev_sales_weekly.csv와 비교하여 증감률 계산 ⑤report.csv 저장 ⑥에러 시 error.log 기록. try-except로 에러 처리 포함."
+
+[코드 핵심]
+import pandas as pd
+import logging
+
+logging.basicConfig(filename='error.log', level=logging.ERROR)
+
+try:
+    df = pd.read_csv('sales_weekly.csv')
+    prev = pd.read_csv('prev_sales_weekly.csv')
+    
+    current = df.groupby('product')['amount'].sum().reset_index()
+    current.columns = ['product', 'total_amount']
+    current = current.sort_values('total_amount', ascending=False)
+    current['rank'] = range(1, len(current)+1)
+    
+    prev_sum = prev.groupby('product')['amount'].sum().reset_index()
+    prev_sum.columns = ['product', 'prev_amount']
+    
+    result = current.merge(prev_sum, on='product', how='left')
+    result['change_rate'] = ((result['total_amount'] - result['prev_amount']) / result['prev_amount'] * 100).round(1)
+    
+    top3 = result.head(3)
+    top3.to_csv('report.csv', index=False, encoding='utf-8-sig')
+except Exception as e:
+    logging.error(f"처리 오류: {e}")
+
+[보안 확인] API키 미포함, 개인정보 미포함, 파일 경로 상대경로 사용</pre>
+<h4>⚠️ 위험 기준</h4><p>API키·비밀번호 하드코딩, 개인정보 포함 코드, 시스템 명령 실행(os.system), 절대 경로 사용</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5개 기능 전부 구현+실행 성공, 에러 처리 완비, 구조적 프롬프트, 보안 준수 (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3~4개 기능 구현, 실행 성공, 기본 프롬프트, 에러 처리 일부 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>2개 기능 구현, 실행 실패 일부, 프롬프트 미흡 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>코드 미완성, 실행 실패, 프롬프트 없음 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-b">과제 B</span> 디버깅·코드 개선 <span class="score">(30점, 13분)</span></h3>
+<h4>📋 시나리오</h4><pre>아래 Python 코드는 CSV 파일에서 월별 매출 합계를 계산하는 스크립트입니다. 3개의 의도적 오류가 포함되어 있습니다. AI 코딩 도구를 활용하여 오류를 찾고 수정하세요.
+
+[의도적 오류 3개]
+(응시자에게는 오류 개수만 알려주고, 위치는 알려주지 않음)</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[제공 코드]
+import pandas as pd
+
+def calculate_monthly_sales(filepath):
+    df = pd.read_csv(filepath)
+    df['date'] = pd.to_datetime(df['date'])
+    df['month'] = df['date'].dt.month
+    
+    monthly = df.groupby('month')['amount'].mean()  # 오류1: mean→sum
+    monthly = monthly.reset_index()
+    monthly.columns = ['month', 'total']
+    
+    monthly['formatted'] = monthly['total'].apply(lambda x: f"{x:,.0f}원")
+    
+    monthly.to_csv('monthly_report.csv', index=False)
+    print(f"처리 완료: {len(monthly)}개월")
+    return monthly
+
+result = calculate_monthly_sales('sales.csv')  # 오류2: 파일 미존재 시 에러 처리 없음
+print(result.sort_values('total'))  # 오류3: ascending=False 누락 (내림차순이어야 함)</pre>
+<h4>📝 요구 산출물</h4><p>오류 목록(위치+원인+수정), 수정된 전체 코드, 디버깅 프롬프트 로그, 추가 개선 사항</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>오류 식별</strong></td><td>10점</td><td>의도적 오류를 정확히 찾아냈는가?</td></tr>
+<tr><td><strong>수정 정확성</strong></td><td>10점</td><td>수정 후 코드가 정상 작동하는가?</td></tr>
+<tr><td><strong>AI 활용 과정</strong></td><td>5점</td><td>AI에게 디버깅을 체계적으로 요청했는가?</td></tr>
+<tr><td><strong>코드 개선</strong></td><td>5점</td><td>오류 수정 외 가독성·구조 개선이 있었는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[AI 디버깅 프롬프트]
+"아래 코드에 3개의 오류가 있어. 각 오류의 위치, 원인, 수정 방법을 알려주고, 수정된 전체 코드를 제시해줘. 추가로 코드 품질을 개선할 수 있는 부분도 제안해줘."
+
+[오류 식별 및 수정]
+오류1: groupby('month')['amount'].mean() → .sum()으로 수정. 월별 매출 "합계"를 구해야 하므로 mean(평균)이 아닌 sum(합계)이 정확.
+오류2: 파일 미존재 시 에러 처리 없음 → try-except FileNotFoundError 추가. 파일이 없을 때 프로그램이 crash되므로 예외 처리 필요.
+오류3: sort_values('total') → sort_values('total', ascending=False)로 수정. 매출 내림차순 정렬이 목적이므로 ascending=False 필요.
+
+[추가 개선]
+- 함수에 docstring 추가
+- encoding='utf-8-sig' 추가 (한글 깨짐 방지)
+- logging 모듈 사용 (print 대신)
+
+[산출물] 수정된 전체 코드 + 오류 3건 식별 목록 + 개선 사항 3건</pre>
+<h4>⚠️ 위험 기준</h4><p>오류를 잘못 식별, 수정 후 새로운 오류 발생, 개인정보 포함 테스트 데이터 사용</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>3개 오류 전부 정확 식별+수정, 실행 성공, 추가 개선 2가지+, 체계적 AI 활용 (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>2개 오류 식별+수정, 실행 성공, 기본 AI 활용 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>1개 오류만 식별, 실행 일부 실패 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>오류 미식별, 수정 실패, AI 미활용 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-c">과제 C</span> 검증·문서화 <span class="score">(35점, 17분)</span></h3>
+<h4>📋 시나리오</h4><pre>과제A에서 작성한 "주간 매출 정리 스크립트"(또는 제공된 정답 코드)에 대해 다음을 수행하세요.
+
+[요구사항]
+1. 테스트 계획: 정상/예외/경계값 테스트 시나리오 작성
+2. 검증 수행: 최소 3가지 테스트를 실제 실행하고 결과 기록
+3. 실행 가이드: 비개발자가 이 스크립트를 실행할 수 있는 가이드 작성
+4. 보안 점검: API키·개인정보·위험 패턴 점검 결과 작성</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[테스트용 데이터]
+정상: sales_weekly.csv (10행, 3개 제품)
+예외: 빈 파일, 컬럼 누락 파일, 한글 깨짐 파일
+경계값: 매출 0원, 음수, 100억 이상
+
+[실행 가이드 필수 항목]
+설치 방법(pip install), 실행 명령, 입력 파일 위치, 출력 파일 설명, 에러 대처</pre>
+<h4>📝 요구 산출물</h4><p>테스트 계획서(시나리오 표), 테스트 실행 결과, 실행 가이드(README 형식), 보안 점검 체크리스트</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>테스트 계획</strong></td><td>10점</td><td>의미 있는 테스트 시나리오를 설계했는가?</td></tr>
+<tr><td><strong>검증 수행</strong></td><td>8점</td><td>테스트를 실제 수행하고 결과를 기록했는가?</td></tr>
+<tr><td><strong>실행 가이드</strong></td><td>10점</td><td>비개발자가 읽고 실행할 수 있는 가이드인가?</td></tr>
+<tr><td><strong>보안 점검</strong></td><td>7점</td><td>API키·개인정보·금지 패턴 등 보안 점검을 수행했는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[AI 프롬프트]
+"아래 코드에 대해 ①테스트 계획(정상·예외·경계값) ②실행 가이드(비개발자용 README) ③보안 점검 체크리스트를 작성해줘."
+
+[테스트 계획]
+| # | 유형 | 시나리오 | 입력 | 기대 결과 |
+|---|------|---------|------|----------|
+| 1 | 정상 | 3제품 10행 데이터 | sales_weekly.csv | report.csv 생성, 상위 3개 |
+| 2 | 예외 | 빈 CSV | empty.csv | 에러 로그 기록, crash 없음 |
+| 3 | 예외 | 파일 미존재 | missing.csv | FileNotFoundError 처리 |
+| 4 | 경계 | 매출 0원 제품 포함 | zero_sales.csv | 증감률 계산 시 ZeroDivisionError 방지 |
+| 5 | 경계 | 전주 데이터 없는 신규 제품 | new_product.csv | NaN 처리 |
+
+[실행 가이드 - README]
+## 주간 매출 정리 스크립트
+### 설치: pip install pandas
+### 실행: python sales_report.py
+### 입력: sales_weekly.csv, prev_sales_weekly.csv (같은 폴더)
+### 출력: report.csv (제품별 매출 합계, 상위 3개, 증감률)
+### 에러: error.log 확인
+
+[보안 점검]
+✅ API키 하드코딩: 없음
+✅ 개인정보: 없음
+✅ os.system/subprocess: 없음
+✅ 절대 경로: 없음 (상대 경로 사용)
+✅ eval/exec: 없음
+
+[산출물] 테스트 5건 + README + 보안 체크리스트 제출</pre>
+<h4>⚠️ 위험 기준</h4><p>테스트에 실제 개인정보 사용, 보안 점검 미수행, 실행 가이드에 비밀번호 포함</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5건+ 테스트(정상·예외·경계), 실행 결과 기록, 완전한 README, 보안 체크리스트 5항목+ (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3건 테스트, 기본 README, 보안 점검 일부 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>테스트 1~2건, README 불완전, 보안 미수행 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>테스트 없음, README 없음, 보안 미수행 (55점 미만)</td></tr></table>
+<div class="set-divider"></div><h2>세트 2 — 날씨 API 연동 알림</h2>
+<h3><span class="badge badge-a">과제 A</span> 자동화 스크립트 구현 <span class="score">(35점, 15분)</span></h3>
+<h4>📋 시나리오</h4><pre>당신은 ㈜라마바 총무팀 직원입니다. 매일 아침 사내 공지용 날씨 정보를 자동으로 수집하는 스크립트를 AI 코딩 도구로 작성하세요.
+
+[기능 요구사항]
+1. 공개 날씨 API(OpenWeatherMap)에서 서울 날씨 조회
+2. 기온·날씨 상태·강수 확률 추출
+3. 사내 공지 형식으로 메시지 생성 ("오늘의 날씨: 맑음, 25°C, 강수 확률 10%")
+4. 결과를 weather_notice.txt에 저장
+5. API 키는 환경변수에서 로드 (하드코딩 금지)</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[API 응답 예시 (JSON)]
+{"weather":[{"main":"Clear","description":"맑음"}],
+ "main":{"temp":25.3,"humidity":45},
+ "rain":{"1h":0},"name":"Seoul"}
+
+[환경변수] WEATHER_API_KEY=your_api_key_here
+[출력] weather_notice.txt: "2026-07-01 오늘의 날씨: 맑음, 25°C, 습도 45%"</pre>
+<h4>📝 요구 산출물</h4><p>완성 코드, 프롬프트 로그, 실행 결과(또는 mock 테스트 결과)</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>코드 실행 성공</strong></td><td>15점</td><td>요구 기능이 실제로 작동하는가?</td></tr>
+<tr><td><strong>요구사항 충족</strong></td><td>8점</td><td>시나리오 요구사항을 빠짐없이 구현했는가?</td></tr>
+<tr><td><strong>코드 품질</strong></td><td>5점</td><td>가독성·구조화·에러 처리</td></tr>
+<tr><td><strong>프롬프트 설계</strong></td><td>4점</td><td>체계적 프롬프트로 AI를 활용했는가?</td></tr>
+<tr><td><strong>보안 준수</strong></td><td>3점</td><td>API키 노출·금지 패턴 여부</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[프롬프트]
+"requests 라이브러리로 OpenWeatherMap API에서 서울 날씨를 조회하는 Python 스크립트를 작성해줘. API 키는 os.environ에서 로드. 기온·날씨·습도를 추출하여 공지 메시지를 생성하고 txt 저장. 에러 처리+로깅 포함. API 키를 코드에 하드코딩하지 마."
+
+[코드 핵심]
+import os, requests, logging
+from datetime import date
+
+API_KEY = os.environ.get('WEATHER_API_KEY')
+if not API_KEY:
+    raise ValueError("환경변수 WEATHER_API_KEY가 설정되지 않았습니다.")
+
+url = f"https://api.openweathermap.org/data/2.5/weather?q=Seoul&appid={API_KEY}&units=metric&lang=kr"
+
+try:
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    weather = data['weather'][0]['description']
+    temp = round(data['main']['temp'])
+    humidity = data['main']['humidity']
+    msg = f"{date.today()} 오늘의 날씨: {weather}, {temp}°C, 습도 {humidity}%"
+    with open('weather_notice.txt','w',encoding='utf-8') as f:
+        f.write(msg)
+except requests.RequestException as e:
+    logging.error(f"API 오류: {e}")
+
+[보안] API_KEY를 os.environ에서 로드, 코드에 미노출, timeout 설정</pre>
+<h4>⚠️ 위험 기준</h4><p>API키 하드코딩, 개인정보 포함, timeout 미설정으로 무한 대기, 에러 미처리</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5개 기능 전부 구현+실행, 환경변수 사용, 에러 처리, 구조적 프롬프트 (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3~4개 기능, 환경변수 사용, 기본 에러 처리 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>2개 기능, API키 하드코딩, 에러 처리 없음 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>코드 미완성, 실행 실패 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-b">과제 B</span> 디버깅·코드 개선 <span class="score">(30점, 13분)</span></h3>
+<h4>📋 시나리오</h4><pre>아래 Python 코드는 REST API에서 데이터를 조회하여 JSON 파일로 저장하는 스크립트입니다. 3개의 의도적 오류가 포함되어 있습니다. AI를 활용하여 오류를 찾고 수정하세요.</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[제공 코드]
+import requests
+import json
+
+API_KEY = "sk-abc123xyz"  # 오류1: API키 하드코딩
+
+def fetch_data(endpoint):
+    url = f"https://api.example.com/{endpoint}"
+    response = requests.get(url)  # 오류2: 인증 헤더 누락, timeout 미설정
+    data = response.json()
+    return data
+
+def save_data(data, filename):
+    with open(filename, 'w') as f:
+        json.dump(data, f)
+    print(f"저장 완료: {filename}")
+
+result = fetch_data("users")
+save_data(result, "output.json")
+print(f"총 {len(result)} 건 처리")  # 오류3: result가 dict일 때 len()이 키 수를 반환</pre>
+<h4>📝 요구 산출물</h4><p>오류 목록(위치+원인+수정), 수정 코드, 디버깅 프롬프트 로그, 추가 개선</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>오류 식별</strong></td><td>10점</td><td>의도적 오류를 정확히 찾아냈는가?</td></tr>
+<tr><td><strong>수정 정확성</strong></td><td>10점</td><td>수정 후 코드가 정상 작동하는가?</td></tr>
+<tr><td><strong>AI 활용 과정</strong></td><td>5점</td><td>AI에게 디버깅을 체계적으로 요청했는가?</td></tr>
+<tr><td><strong>코드 개선</strong></td><td>5점</td><td>오류 수정 외 가독성·구조 개선이 있었는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[AI 프롬프트]
+"아래 API 연동 코드에 3개 오류가 있어. 각 오류의 위치, 원인, 수정 방법을 알려주고 수정된 코드를 제시해줘. 보안·성능 개선도 제안해줘."
+
+[오류 식별]
+오류1: API_KEY 하드코딩 → os.environ.get('API_KEY')로 수정. 코드에 API키가 노출되면 Git 푸시 시 유출 위험.
+오류2: 인증 헤더 누락+timeout 미설정 → headers={"Authorization": f"Bearer {API_KEY}"}, timeout=10 추가. 인증 없이 API 호출 실패, timeout 없으면 무한 대기.
+오류3: len(result)가 dict의 키 수 반환 → result가 dict이면 특정 키(예: result['data'])의 len()을 사용하거나 타입 체크 추가.
+
+[추가 개선] resp.raise_for_status() 추가, encoding='utf-8' 추가, logging 모듈 사용
+[산출물] 수정 코드 + 오류 3건 + 개선 3건</pre>
+<h4>⚠️ 위험 기준</h4><p>수정 코드에 API키가 여전히 하드코딩, 보안 개선 미반영</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>3개 오류 전부 정확 식별+수정+보안 개선, 실행 성공, AI 체계적 활용 (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>2개 오류 식별+수정, 기본 보안 인식 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>1개 오류만 식별 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>오류 미식별, 수정 실패 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-c">과제 C</span> 검증·문서화 <span class="score">(35점, 17분)</span></h3>
+<h4>📋 시나리오</h4><pre>과제A의 "날씨 API 스크립트"(또는 정답 코드)에 대해 다음을 수행하세요.
+
+[요구사항]
+1. 테스트 계획: API 성공·실패·타임아웃 시나리오
+2. 검증 수행: mock 또는 실제 테스트 3건+
+3. 실행 가이드: 환경변수 설정 포함 README
+4. 보안 점검: API키 관리·네트워크 보안 점검</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[테스트 시나리오 예시]
+정상: API 응답 200, 날씨 데이터 정상
+예외: API 응답 401(인증 실패), 500(서버 오류)
+경계: 네트워크 타임아웃, API 키 미설정, 응답 JSON 형식 오류</pre>
+<h4>📝 요구 산출물</h4><p>테스트 계획서, 테스트 결과, README(환경변수 설정 포함), 보안 체크리스트</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>테스트 계획</strong></td><td>10점</td><td>의미 있는 테스트 시나리오를 설계했는가?</td></tr>
+<tr><td><strong>검증 수행</strong></td><td>8점</td><td>테스트를 실제 수행하고 결과를 기록했는가?</td></tr>
+<tr><td><strong>실행 가이드</strong></td><td>10점</td><td>비개발자가 읽고 실행할 수 있는 가이드인가?</td></tr>
+<tr><td><strong>보안 점검</strong></td><td>7점</td><td>API키·개인정보·금지 패턴 등 보안 점검을 수행했는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[테스트 계획]
+| # | 유형 | 시나리오 | 기대 결과 |
+|---|------|---------|----------|
+| 1 | 정상 | API 200 응답 | weather_notice.txt 생성 |
+| 2 | 예외 | API 키 미설정 | ValueError 발생, 안내 메시지 |
+| 3 | 예외 | API 401 응답 | 에러 로그 기록, crash 없음 |
+| 4 | 경계 | 네트워크 타임아웃 | timeout 에러 처리 |
+| 5 | 경계 | 응답 JSON 이상 | KeyError 처리 |
+
+[README]
+## 날씨 공지 스크립트
+### 사전 준비
+1. pip install requests
+2. 환경변수 설정: export WEATHER_API_KEY=your_key
+### 실행: python weather_notice.py
+### 출력: weather_notice.txt
+
+[보안 점검]
+✅ API키: 환경변수 사용, 코드 미노출
+✅ HTTPS: API URL https:// 사용
+✅ timeout: 10초 설정
+✅ 개인정보: 없음
+✅ eval/exec: 없음
+[산출물] 테스트 5건 + README + 보안 체크리스트</pre>
+<h4>⚠️ 위험 기준</h4><p>테스트에 실제 API키 노출, README에 비밀번호 포함, HTTPS 미사용</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5건+ 테스트, 완전한 README(환경변수 포함), 보안 5항목+ (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3건 테스트, 기본 README, 보안 일부 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>1~2건 테스트, README 불완전 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>테스트·README·보안 모두 없음 (55점 미만)</td></tr></table>
+<div class="set-divider"></div><h2>세트 3 — 엑셀 보고서 배치 처리</h2>
+<h3><span class="badge badge-a">과제 A</span> 자동화 스크립트 구현 <span class="score">(35점, 15분)</span></h3>
+<h4>📋 시나리오</h4><pre>당신은 ㈜사아자 경영지원팀 직원입니다. 매월 5개 부서에서 받는 엑셀 월간 보고서를 합치는 작업을 자동화하고 싶습니다. AI 코딩 도구로 Python 스크립트를 작성하세요.
+
+[기능 요구사항]
+1. reports/ 폴더 내 모든 .xlsx 파일을 읽기
+2. 각 파일의 "요약" 시트에서 부서명·매출·비용·이익 컬럼 추출
+3. 전체를 하나의 DataFrame으로 합치기
+4. 부서별 합계 행 추가
+5. 결과를 consolidated_report.xlsx로 저장 (서식 포함)</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[reports/ 폴더 구조]
+reports/
+  영업팀_202606.xlsx
+  개발팀_202606.xlsx
+  마케팅팀_202606.xlsx
+  경영지원팀_202606.xlsx
+  인사팀_202606.xlsx
+
+[각 파일 "요약" 시트 구조]
+부서명 | 매출 | 비용 | 이익
+영업팀 | 150000000 | 120000000 | 30000000</pre>
+<h4>📝 요구 산출물</h4><p>완성 코드, 프롬프트 로그, 실행 결과</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>코드 실행 성공</strong></td><td>15점</td><td>요구 기능이 실제로 작동하는가?</td></tr>
+<tr><td><strong>요구사항 충족</strong></td><td>8점</td><td>시나리오 요구사항을 빠짐없이 구현했는가?</td></tr>
+<tr><td><strong>코드 품질</strong></td><td>5점</td><td>가독성·구조화·에러 처리</td></tr>
+<tr><td><strong>프롬프트 설계</strong></td><td>4점</td><td>체계적 프롬프트로 AI를 활용했는가?</td></tr>
+<tr><td><strong>보안 준수</strong></td><td>3점</td><td>API키 노출·금지 패턴 여부</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[프롬프트]
+"openpyxl과 pandas를 사용하여 폴더 내 xlsx 파일들을 합치는 스크립트를 작성해줘. 각 파일의 '요약' 시트에서 부서명·매출·비용·이익을 추출하고, 전체 합계 행을 추가하여 consolidated_report.xlsx로 저장. 파일이 없거나 시트가 없으면 로그에 기록하고 건너뛰기. 금액은 천 단위 구분 서식 적용."
+
+[코드 핵심]
+import pandas as pd
+import os, logging, glob
+
+logging.basicConfig(filename='batch.log', level=logging.INFO)
+files = glob.glob('reports/*.xlsx')
+all_data = []
+
+for f in files:
+    try:
+        df = pd.read_excel(f, sheet_name='요약')
+        all_data.append(df[['부서명','매출','비용','이익']])
+        logging.info(f"처리 완료: {f}")
+    except Exception as e:
+        logging.error(f"처리 실패: {f} - {e}")
+
+if all_data:
+    result = pd.concat(all_data, ignore_index=True)
+    total = pd.DataFrame([{'부서명':'합계','매출':result['매출'].sum(),'비용':result['비용'].sum(),'이익':result['이익'].sum()}])
+    result = pd.concat([result, total], ignore_index=True)
+    result.to_excel('consolidated_report.xlsx', index=False)
+
+[보안] 개인정보 미포함, 상대 경로, API키 불필요
+[산출물] 코드 + 프롬프트 로그 + 실행 결과</pre>
+<h4>⚠️ 위험 기준</h4><p>개인정보 포함 엑셀 처리, 절대 경로 사용, 원본 파일 덮어쓰기</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5개 기능 구현+실행 성공, 에러 처리(파일 누락 스킵), 서식 적용, 구조적 프롬프트 (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3~4개 기능, 실행 성공, 기본 에러 처리 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>2개 기능, 일부 실행 실패 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>코드 미완성, 실행 실패 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-b">과제 B</span> 디버깅·코드 개선 <span class="score">(30점, 13분)</span></h3>
+<h4>📋 시나리오</h4><pre>아래 Python 코드는 엑셀 파일에서 특정 조건의 데이터를 필터링하는 스크립트입니다. 3개의 의도적 오류가 포함되어 있습니다. AI로 오류를 찾고 수정하세요.</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[제공 코드]
+import pandas as pd
+
+def filter_data(filepath, min_amount):
+    df = pd.read_excel(filepath)
+    
+    filtered = df[df['amount'] > min_amount]  # 오류1: >= 이어야 함 (이상, 초과 아님)
+    
+    filtered['ratio'] = filtered['amount'] / df['total']  # 오류2: df 대신 filtered 사용해야 함 (인덱스 불일치)
+    
+    filtered.to_excel('filtered_output.xlsx')
+    
+    summary = filtered.groupby('dept')['amount'].sum()
+    print(f"부서 수: {len(summary)}")
+    print(f"평균 금액: {summary.mean():,.0f}원")
+    
+    return filtered
+
+result = filter_data('data.xlsx', 1000000)
+print(f"필터링 결과: {result.shape[0]}건")
+# 오류3: 파일 미존재 시 에러 처리 없음 + result가 None일 때 .shape 에러</pre>
+<h4>📝 요구 산출물</h4><p>오류 목록, 수정 코드, 디버깅 프롬프트 로그, 추가 개선</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>오류 식별</strong></td><td>10점</td><td>의도적 오류를 정확히 찾아냈는가?</td></tr>
+<tr><td><strong>수정 정확성</strong></td><td>10점</td><td>수정 후 코드가 정상 작동하는가?</td></tr>
+<tr><td><strong>AI 활용 과정</strong></td><td>5점</td><td>AI에게 디버깅을 체계적으로 요청했는가?</td></tr>
+<tr><td><strong>코드 개선</strong></td><td>5점</td><td>오류 수정 외 가독성·구조 개선이 있었는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[오류 식별]
+오류1: df['amount'] > min_amount → >= min_amount. "이상"은 해당 값 포함(>=), "초과"는 미포함(>). 요구사항이 "이상"이므로 >= 사용.
+오류2: filtered['amount'] / df['total'] → filtered['amount'] / filtered['total']. 필터링 후 인덱스가 달라져 df와 매칭 오류 발생.
+오류3: 파일 미존재+None 방어 → try-except 추가, 함수 반환값 None 체크.
+
+[추가 개선] docstring, index=False, encoding, 타입 힌트
+[산출물] 수정 코드 + 오류 3건 + 개선 사항</pre>
+<h4>⚠️ 위험 기준</h4><p>오류 잘못 식별, 수정 후 새 오류 발생, 개인정보 테스트 데이터</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>3개 오류 전부 식별+수정+실행 성공, 추가 개선, 체계적 AI (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>2개 오류 식별+수정 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>1개 오류만 식별 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>오류 미식별, 수정 실패 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-c">과제 C</span> 검증·문서화 <span class="score">(35점, 17분)</span></h3>
+<h4>📋 시나리오</h4><pre>과제A의 "엑셀 배치 처리 스크립트"에 대해 다음을 수행하세요.
+
+[요구사항]
+1. 테스트 계획: 정상·예외·경계값 시나리오
+2. 검증 수행: 3건+ 테스트 실행 결과 기록
+3. 실행 가이드: 비개발자용 README
+4. 보안 점검: 개인정보·파일 안전성 점검</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[테스트 시나리오]
+정상: 5개 xlsx 파일, 정상 데이터
+예외: 빈 폴더, xlsx 아닌 파일 혼재, "요약" 시트 없는 파일
+경계: 1개 파일만, 매출 0원, 컬럼명 다른 파일</pre>
+<h4>📝 요구 산출물</h4><p>테스트 계획서, 테스트 결과, README, 보안 체크리스트</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>테스트 계획</strong></td><td>10점</td><td>의미 있는 테스트 시나리오를 설계했는가?</td></tr>
+<tr><td><strong>검증 수행</strong></td><td>8점</td><td>테스트를 실제 수행하고 결과를 기록했는가?</td></tr>
+<tr><td><strong>실행 가이드</strong></td><td>10점</td><td>비개발자가 읽고 실행할 수 있는 가이드인가?</td></tr>
+<tr><td><strong>보안 점검</strong></td><td>7점</td><td>API키·개인정보·금지 패턴 등 보안 점검을 수행했는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[테스트 계획]
+| # | 유형 | 시나리오 | 기대 결과 |
+|---|------|---------|----------|
+| 1 | 정상 | 5개 파일 정상 | consolidated_report.xlsx 생성 |
+| 2 | 예외 | 빈 폴더 | 안내 메시지, crash 없음 |
+| 3 | 예외 | "요약" 시트 없음 | 해당 파일 스킵+로그 |
+| 4 | 경계 | 1개 파일만 | 합계 = 해당 부서 값 |
+| 5 | 경계 | 매출 0원 | 정상 처리, 이익=비용*(-1) |
+
+[README]
+## 엑셀 보고서 합치기 스크립트
+### 설치: pip install pandas openpyxl
+### 준비: reports/ 폴더에 xlsx 파일 배치
+### 실행: python consolidate.py
+### 출력: consolidated_report.xlsx
+### 에러: batch.log 확인
+
+[보안 점검]
+✅ 개인정보: 부서명·금액만 처리, 개인정보 없음
+✅ 원본 보존: 원본 파일 수정 없음(읽기만)
+✅ 절대 경로: 미사용
+✅ eval/exec: 미사용
+✅ 파일 덮어쓰기: 출력 파일만 생성
+[산출물] 테스트 5건 + README + 보안 체크리스트</pre>
+<h4>⚠️ 위험 기준</h4><p>원본 파일 삭제·덮어쓰기, 개인정보 포함 데이터 처리, 보안 점검 미수행</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5건+ 테스트, README 완전, 보안 5항목+ (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3건 테스트, 기본 README, 보안 일부 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>1~2건 테스트, README 불완전 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>테스트·문서·보안 모두 없음 (55점 미만)</td></tr></table>
+<div class="set-divider"></div><h2>세트 4 — 서버 로그 분석 자동화</h2>
+<h3><span class="badge badge-a">과제 A</span> 자동화 스크립트 구현 <span class="score">(35점, 15분)</span></h3>
+<h4>📋 시나리오</h4><pre>당신은 ㈜차카타 IT운영팀 직원입니다. 매일 서버 접속 로그를 분석하는 작업을 자동화하고 싶습니다. AI 코딩 도구로 Python 스크립트를 작성하세요.
+
+[기능 요구사항]
+1. access_log.txt 파일을 읽어 파싱 (IP, 시간, 경로, 상태코드)
+2. 상태코드별 요청 수 집계 (200, 404, 500 등)
+3. 404 에러가 가장 많은 경로 상위 5개 추출
+4. 시간대별 요청 수 집계 (0~23시)
+5. 결과를 log_report.json으로 저장</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[access_log.txt 형식]
+192.168.1.10 - - [01/Jul/2026:09:15:23] "GET /index.html HTTP/1.1" 200
+192.168.1.11 - - [01/Jul/2026:09:16:45] "GET /missing.html HTTP/1.1" 404
+192.168.1.12 - - [01/Jul/2026:14:22:10] "POST /api/data HTTP/1.1" 500
+...
+
+[출력: log_report.json]
+{"status_counts":{"200":150,"404":23,"500":5},
+ "top_404_paths":["/missing.html","/old-page.html",...],
+ "hourly_counts":{"0":5,"1":3,...,"23":8}}</pre>
+<h4>📝 요구 산출물</h4><p>완성 코드, 프롬프트 로그, 실행 결과</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>코드 실행 성공</strong></td><td>15점</td><td>요구 기능이 실제로 작동하는가?</td></tr>
+<tr><td><strong>요구사항 충족</strong></td><td>8점</td><td>시나리오 요구사항을 빠짐없이 구현했는가?</td></tr>
+<tr><td><strong>코드 품질</strong></td><td>5점</td><td>가독성·구조화·에러 처리</td></tr>
+<tr><td><strong>프롬프트 설계</strong></td><td>4점</td><td>체계적 프롬프트로 AI를 활용했는가?</td></tr>
+<tr><td><strong>보안 준수</strong></td><td>3점</td><td>API키 노출·금지 패턴 여부</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[프롬프트]
+"정규표현식으로 웹 서버 접속 로그를 파싱하는 Python 스크립트를 작성해줘. 기능: ①로그 파일 읽기 ②IP·시간·경로·상태코드 추출(regex) ③상태코드별 집계 ④404 상위 5개 경로 ⑤시간대별 집계 ⑥JSON 저장. collections.Counter 사용. 에러 처리 포함."
+
+[코드 핵심]
+import re, json
+from collections import Counter
+
+pattern = r'(\S+) .+ \[(\d{2}/\w+/\d{4}):(\d{2}):\d{2}:\d{2}\] "\w+ (\S+) .+" (\d{3})'
+
+with open('access_log.txt','r') as f:
+    lines = f.readlines()
+
+status_counts = Counter()
+path_404 = Counter()
+hourly = Counter()
+
+for line in lines:
+    m = re.match(pattern, line)
+    if m:
+        ip, date, hour, path, status = m.groups()
+        status_counts[status] += 1
+        hourly[hour] += 1
+        if status == '404':
+            path_404[path] += 1
+
+report = {
+    'status_counts': dict(status_counts),
+    'top_404_paths': [p for p,_ in path_404.most_common(5)],
+    'hourly_counts': dict(sorted(hourly.items()))
+}
+
+with open('log_report.json','w',encoding='utf-8') as f:
+    json.dump(report, f, ensure_ascii=False, indent=2)
+
+[보안] IP 주소는 내부망 가상 데이터, 개인정보 미포함
+[산출물] 코드 + 프롬프트 로그 + 실행 결과</pre>
+<h4>⚠️ 위험 기준</h4><p>실제 서버 IP·사용자 정보 포함, 개인정보 로깅, os.system 사용</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5개 기능 구현+실행+정규표현식 정확, 에러 처리, 구조적 프롬프트 (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3~4개 기능, 실행 성공, 기본 프롬프트 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>2개 기능, regex 오류, 실행 일부 실패 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>코드 미완성, 실행 실패 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-b">과제 B</span> 디버깅·코드 개선 <span class="score">(30점, 13분)</span></h3>
+<h4>📋 시나리오</h4><pre>아래 Python 코드는 텍스트 파일에서 키워드를 검색하여 결과를 저장하는 스크립트입니다. 3개의 의도적 오류가 포함되어 있습니다. AI로 오류를 찾고 수정하세요.</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[제공 코드]
+import os
+
+def search_keyword(folder, keyword):
+    results = []
+    
+    for filename in os.listdir(folder):
+        filepath = folder + filename  # 오류1: os.path.join 미사용 (OS별 경로 구분자 문제)
+        
+        with open(filepath, 'r') as f:  # 오류2: encoding 미지정 (한글 파일 UnicodeDecodeError)
+            for i, line in enumerate(f):
+                if keyword in line:
+                    results.append({
+                        'file': filename,
+                        'line': i,  # 오류3: i는 0부터 시작, 사용자에게는 1부터 표시해야 함
+                        'content': line.strip()
+                    })
+    
+    print(f"'{keyword}' 검색 결과: {len(results)}건")
+    return results
+
+matches = search_keyword('./logs/', '에러')
+for m in matches:
+    print(f"  {m['file']} 라인{m['line']}: {m['content']}")</pre>
+<h4>📝 요구 산출물</h4><p>오류 목록, 수정 코드, 디버깅 프롬프트 로그, 추가 개선</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>오류 식별</strong></td><td>10점</td><td>의도적 오류를 정확히 찾아냈는가?</td></tr>
+<tr><td><strong>수정 정확성</strong></td><td>10점</td><td>수정 후 코드가 정상 작동하는가?</td></tr>
+<tr><td><strong>AI 활용 과정</strong></td><td>5점</td><td>AI에게 디버깅을 체계적으로 요청했는가?</td></tr>
+<tr><td><strong>코드 개선</strong></td><td>5점</td><td>오류 수정 외 가독성·구조 개선이 있었는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[오류 식별]
+오류1: folder + filename → os.path.join(folder, filename). 문자열 결합은 OS별 경로 구분자(/, \)를 처리하지 못함.
+오류2: open(filepath, 'r') → open(filepath, 'r', encoding='utf-8'). 한글 파일 읽기 시 UnicodeDecodeError 발생.
+오류3: 'line': i → 'line': i+1. enumerate는 0부터 시작하지만 사용자에게 표시할 때는 1부터가 자연스러움.
+
+[추가 개선]
+- 바이너리 파일 스킵 (try-except UnicodeDecodeError)
+- 파일 확장자 필터(.txt, .log만)
+- 검색 결과 JSON 저장 기능
+[산출물] 수정 코드 + 오류 3건 + 개선 3건</pre>
+<h4>⚠️ 위험 기준</h4><p>오류 잘못 식별, 수정 후 경로 취약점(path traversal), 개인정보 포함</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>3개 오류 전부 식별+수정+실행 성공, 개선 2가지+, 체계적 AI (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>2개 오류 식별+수정 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>1개 오류만 식별 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>오류 미식별, 수정 실패 (55점 미만)</td></tr></table>
+<h3><span class="badge badge-c">과제 C</span> 검증·문서화 <span class="score">(35점, 17분)</span></h3>
+<h4>📋 시나리오</h4><pre>과제A의 "로그 분석 스크립트"에 대해 다음을 수행하세요.
+
+[요구사항]
+1. 테스트 계획: 다양한 로그 형식·규모 시나리오
+2. 검증 수행: 3건+ 테스트 실행 결과 기록
+3. 실행 가이드: 비개발자용 README
+4. 보안 점검: IP·로그 데이터 보안 점검</pre>
+<h4>📊 제공 데이터/코드</h4><pre>[테스트 시나리오]
+정상: 100행 로그, 다양한 상태코드
+예외: 빈 파일, 형식 불일치 행, 파일 미존재
+경계: 1행 로그, 1만행 대용량, 특수문자 포함 경로</pre>
+<h4>📝 요구 산출물</h4><p>테스트 계획서, 테스트 결과, README, 보안 체크리스트</p>
+<h4>📏 루브릭</h4><table><tr><th>평가 항목</th><th>배점</th><th>기준</th></tr>
+<tr><td><strong>테스트 계획</strong></td><td>10점</td><td>의미 있는 테스트 시나리오를 설계했는가?</td></tr>
+<tr><td><strong>검증 수행</strong></td><td>8점</td><td>테스트를 실제 수행하고 결과를 기록했는가?</td></tr>
+<tr><td><strong>실행 가이드</strong></td><td>10점</td><td>비개발자가 읽고 실행할 수 있는 가이드인가?</td></tr>
+<tr><td><strong>보안 점검</strong></td><td>7점</td><td>API키·개인정보·금지 패턴 등 보안 점검을 수행했는가?</td></tr>
+</table>
+<h4>✅ 모범답안</h4><pre>[테스트 계획]
+| # | 유형 | 시나리오 | 기대 결과 |
+|---|------|---------|----------|
+| 1 | 정상 | 100행, 200/404/500 혼합 | JSON 정확 생성 |
+| 2 | 예외 | 빈 파일 | 빈 JSON, crash 없음 |
+| 3 | 예외 | 형식 불일치 행 | 해당 행 스킵+정상 행 처리 |
+| 4 | 경계 | 1행 로그 | 정상 처리 |
+| 5 | 경계 | 1만행 대용량 | 처리 시간 측정, 정상 완료 |
+
+[README]
+## 서버 로그 분석 스크립트
+### 설치: Python 3.8+, 추가 패키지 불필요 (표준 라이브러리만 사용)
+### 실행: python log_analyzer.py
+### 입력: access_log.txt (같은 폴더)
+### 출력: log_report.json
+
+[보안 점검]
+✅ IP 주소: 가상 내부 IP만 사용
+✅ 개인정보: 사용자 식별 정보 미포함
+✅ 로그 파일: 읽기 전용, 원본 미수정
+✅ os.system: 미사용
+✅ 출력 파일: JSON만 생성, 실행 파일 없음
+[산출물] 테스트 5건 + README + 보안 체크리스트</pre>
+<h4>⚠️ 위험 기준</h4><p>실제 서버 로그 사용(실제 IP·사용자), 보안 점검 미수행, 로그에 개인정보 포함</p>
+<h4>📊 벤치마크</h4><table><tr><th>등급</th><th>기준</th></tr><tr><td><strong>우수</strong></td><td>5건+ 테스트, README 완전, 보안 5항목+, 대용량 테스트 포함 (85~100점)</td></tr><tr><td><strong>보통</strong></td><td>3건 테스트, 기본 README, 보안 일부 (65~80점)</td></tr><tr><td><strong>경계</strong></td><td>1~2건 테스트, README 불완전 (55~65점)</td></tr><tr><td><strong>불합격</strong></td><td>테스트·문서·보안 모두 없음 (55점 미만)</td></tr></table>
+<div class="note">금지사항: 개인정보·실제 API키 입력 금지, 외부 AI 사용 금지(LMS 내장 AI만 허용), 타인 답안 참조 금지, os.system·subprocess 등 시스템 명령 실행 금지</div><div class="note">허용 도구: LMS 내장 AI 코딩 도구 (Copilot/Cursor 기반)</div><footer class="footer">㈜AiNex · AiNexEdu · AXIS-C L2 실기 v1</footer></div></body></html>

@@ -1,0 +1,21 @@
+﻿column_name,required,example,description
+cert_type,필수,AXIS / AXIS-C / AXIS-H,자격 구분
+level,필수,L2 / L1,실기 적용 등급
+task_type,필수,task_a / task_b / task_c / part_a / part_b,과제 또는 파트 유형
+task_title,필수,업무 문서 작성,과제명
+scenario_content,필수,응시자에게 제시할 업무 상황,시나리오 본문
+sample_data,권장,"가상 데이터, 표, 조건",제공자료
+required_structure,필수,"제목, 목적, 본문, 검증결과",요구 산출물 구조
+forbidden_rules,필수권장,"개인정보 입력 금지, 외부 AI 사용 금지",금지사항
+rubric,필수,항목별 배점 JSON 또는 표준 루브릭 코드,채점 루브릭
+max_score,필수,30 / 35 / 40 / 60,과제 만점
+model_answer,필수권장,우수 답안 예시,기준 답안
+risk_criteria,필수권장,"개인정보, 보안, 의료행위 오인 등",감점·위험 기준
+benchmark_excellent,권장,85~100점 답안 예시,우수 답안
+benchmark_normal,권장,65~80점 답안 예시,보통 답안
+benchmark_borderline,권장,55~65점 답안 예시,경계 답안
+benchmark_fail,권장,55점 미만 답안 예시,불합격 답안
+ai_prompt_version,권장,AXIS-L2-TASKA-v1.0,AI 채점 프롬프트 버전
+review_status,필수권장,draft / reviewed / approved / rejected,검수상태
+review_comment,권장,루브릭 보완 필요,검수 의견
+version,필수,1,과제 버전

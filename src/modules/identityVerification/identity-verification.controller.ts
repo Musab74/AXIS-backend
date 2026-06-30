@@ -64,6 +64,7 @@ export class IdentityVerificationController {
       liveFaceImage: liveFile.buffer,
       expectedName,
       expectedBirthDate,
+      userId: user.id,
     });
   }
 

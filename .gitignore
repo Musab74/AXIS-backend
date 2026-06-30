@@ -11,3 +11,7 @@ prisma/migrations/dev.db*
 *.tsbuildinfo
 .idea/
 .vscode/
+
+# Local uploads (dev/demo mode) — never commit proctor/evidence files
+uploads/**
+!uploads/.gitkeep

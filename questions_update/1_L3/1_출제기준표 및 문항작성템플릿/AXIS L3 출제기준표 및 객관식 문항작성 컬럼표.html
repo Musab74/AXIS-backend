@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AXIS L3 출제기준표 및 객관식 문항작성 컬럼표 v1.1</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Noto Sans KR',sans-serif;color:#1f2937;line-height:1.85;font-size:16.5px;background:#fff}
+.wrap{max-width:900px;margin:0 auto;padding:48px 32px 80px}
+.cover{border-bottom:2px solid #111;padding-bottom:28px;margin-bottom:40px}
+.cover h1{font-size:31px;font-weight:800;color:#111;line-height:1.3;margin-bottom:10px}
+.cover-sub{font-size:16.5px;color:#6b7280;margin-bottom:18px}
+.cover-meta{display:flex;gap:20px;font-size:14px;color:#9ca3af;flex-wrap:wrap}
+h2{font-size:23px;font-weight:800;color:#111;margin:48px 0 18px;padding-bottom:10px;border-bottom:1px solid #e5e7eb}
+h3{font-size:19px;font-weight:700;color:#1f2937;margin:32px 0 12px}
+h4{font-size:17px;font-weight:700;color:#374151;margin:24px 0 8px}
+p{margin-bottom:12px;color:#4b5563}
+strong{color:#1f2937}
+table{width:100%;border-collapse:collapse;margin:14px 0 22px;font-size:15px}
+th{background:#f9fafb;color:#111;border:1px solid #e5e7eb;padding:10px 14px;text-align:left;font-weight:700}
+td{border:1px solid #e5e7eb;padding:10px 14px;color:#4b5563;vertical-align:top}
+th.center,td.center{text-align:center}
+ul{margin:8px 0 16px 22px;color:#4b5563}
+li{margin:5px 0}
+.note{border:1px solid #e5e7eb;border-left:3px solid #2563eb;padding:14px 18px;margin:16px 0;color:#4b5563}
+.note.warn{border-left-color:#d97706}
+.note.ok{border-left-color:#059669}
+.note.danger{border-left-color:#dc2626}
+.part-label{font-size:14px;font-weight:700;color:#2563eb;letter-spacing:2px;text-transform:uppercase;margin:56px 0 8px;padding-top:28px;border-top:2px solid #e5e7eb}
+.req{color:#dc2626;font-weight:700;font-size:14px}
+.rec{color:#d97706;font-weight:700;font-size:14px}
+.opt{color:#6b7280;font-weight:700;font-size:14px}
+.footer{border-top:1px solid #e5e7eb;margin-top:56px;padding-top:20px;color:#9ca3af;font-size:14px;text-align:center}
+@media(max-width:680px){.wrap{padding:28px 16px} h1{font-size:24px} table{font-size:14px}}
+@media print{.wrap{max-width:none;padding:20mm} h2{page-break-before:auto}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="cover">
+  <h1>AXIS L3 출제기준표<br>및 객관식 문항작성 컬럼표</h1>
+  <p class="cover-sub">AXIS · AXIS-C · AXIS-H — L3 객관식 50문항 출제 기준과 문항 작성 양식</p>
+  <div class="cover-meta">
+    <span>㈜AiNex · AiNexEdu</span>
+    <span>v1.1</span>
+    <span>출제위원·검수위원·개발팀 공통 기준</span>
+  </div>
+</header>
+
+
+<!-- ══════════════════════════════════════ -->
+<div class="part-label">Part A — L3 출제기준표</div>
+<!-- ══════════════════════════════════════ -->
+
+<h2>1. L3 공통 기준</h2>
+
+<table>
+  <tr><th style="width:160px">항목</th><th>기준</th></tr>
+  <tr><td><strong>시험 구성</strong></td><td>객관식 50문항, 4지선다</td></tr>
+  <tr><td><strong>시험 시간</strong></td><td>40분</td></tr>
+  <tr><td><strong>배점</strong></td><td>문항당 2점, 총 100점</td></tr>
+  <tr><td><strong>합격 기준</strong></td><td>60점 이상 (30문항 이상 정답)</td></tr>
+  <tr><td><strong>과락 기준</strong></td><td>과목별 40% 미만 시 과락 (전체 점수 무관하게 불합격)</td></tr>
+  <tr><td><strong>채점 방식</strong></td><td>정답키 기반 로직 자동채점 (AI API 미사용)</td></tr>
+  <tr><td><strong>출제 방식</strong></td><td>문제은행 랜덤 출제 (문항·선택지 셔플)</td></tr>
+  <tr><td><strong>결과 발표</strong></td><td>시험 종료 즉시 (총점·과목별 점수·과락·합격 여부·정답해설)</td></tr>
+  <tr><td><strong>1차 문제은행</strong></td><td>자격별 200문항 (50문항 시험의 4배수)</td></tr>
+</table>
+
+<h3>과목별 과락 기준 (3개 자격 공통)</h3>
+<table>
+  <tr><th>과목 구분</th><th>문항 수</th><th>만점</th><th class="center">과락 컷 (40%)</th><th>의미</th></tr>
+  <tr><td><strong>과목1·과목2</strong> (15문항)</td><td>15문항</td><td>30점</td><td class="center"><strong>12점 미만</strong></td><td>5문항 이하 정답 시 과락</td></tr>
+  <tr><td><strong>과목3·과목4</strong> (10문항)</td><td>10문항</td><td>20점</td><td class="center"><strong>8점 미만</strong></td><td>3문항 이하 정답 시 과락</td></tr>
+</table>
+<div class="note">
+  <strong>출제위원 주의:</strong> 과락을 방지하려면 각 과목에 난이도 "하" 문항이 최소 4~6개 포함되어야 한다. 특정 과목을 모두 "상" 문항으로 채우면 해당 과목에서 과락률이 비정상적으로 높아진다.
+</div>
+
+<h3>전체 난이도 비율</h3>
+<table>
+  <tr><th>난이도</th><th class="center">비율</th><th class="center">문항 수</th><th>출제 방향</th></tr>
+  <tr><td><strong>하 (easy)</strong></td><td class="center">40%</td><td class="center">20문항</td><td>기본 개념, 용어, 안전수칙 확인</td></tr>
+  <tr><td><strong>중 (medium)</strong></td><td class="center">45%</td><td class="center">22~23문항</td><td>업무 상황에 따른 적용·판단</td></tr>
+  <tr><td><strong>상 (hard)</strong></td><td class="center">15%</td><td class="center">7~8문항</td><td>복합 시나리오, 리스크 판단</td></tr>
+</table>
+
+<div class="note ok">
+  <strong>L3 난이도 설계 근거:</strong> L3는 "기초 확인" 등급이므로 쉬운 문항(하+중)이 85%를 차지한다. 초기 응시자가 합격 경험을 통해 L2로 연결되도록 진입장벽을 낮추되, 상 15%로 변별력을 확보한다.
+</div>
+
+
+<!-- ═══ AXIS L3 ═══ -->
+<h2>2. AXIS L3 출제기준표</h2>
+
+<h3>과목별 출제 기준</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">배점</th><th>세부 출제영역</th><th>주 문항유형</th></tr>
+  <tr><td><strong>AI 기본 이해</strong></td><td class="center">15</td><td class="center">30점</td><td>생성형 AI 개념, LLM 기본 원리, 할루시네이션, AI의 한계, 주요 도구 구분</td><td>개념이해형</td></tr>
+  <tr><td><strong>AI 도구 활용 기초</strong></td><td class="center">15</td><td class="center">30점</td><td>문서 작성, 요약, 번역, 정보 정리, 업무 보조, AI 도구 선택</td><td>도구활용형</td></tr>
+  <tr><td><strong>프롬프트 기초</strong></td><td class="center">10</td><td class="center">20점</td><td>역할 지정, 맥락 제공, 조건 설정, 출력 형식 지정, 단계적 질문</td><td>프롬프트기초형</td></tr>
+  <tr><td><strong>AI 윤리·보안 기초</strong></td><td class="center">10</td><td class="center">20점</td><td>개인정보 입력 금지, 저작권, 보안 수칙, AI 결과 검증 필요성</td><td>윤리·보안판단형</td></tr>
+</table>
+
+<h3>과목별 난이도 배분 가이드</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">하</th><th class="center">중</th><th class="center">상</th></tr>
+  <tr><td><strong>AI 기본 이해</strong></td><td class="center">15</td><td class="center">6</td><td class="center">7</td><td class="center">2</td></tr>
+  <tr><td><strong>AI 도구 활용 기초</strong></td><td class="center">15</td><td class="center">6</td><td class="center">7</td><td class="center">2</td></tr>
+  <tr><td><strong>프롬프트 기초</strong></td><td class="center">10</td><td class="center">4</td><td class="center">4~5</td><td class="center">1~2</td></tr>
+  <tr><td><strong>AI 윤리·보안 기초</strong></td><td class="center">10</td><td class="center">4</td><td class="center">4~5</td><td class="center">1~2</td></tr>
+  <tr><td><strong>합계</strong></td><td class="center"><strong>50</strong></td><td class="center"><strong>20</strong></td><td class="center"><strong>22~23</strong></td><td class="center"><strong>7~8</strong></td></tr>
+</table>
+
+<h3>문항유형 비율</h3>
+<table>
+  <tr><th>문항유형</th><th class="center">비율</th><th class="center">문항 수</th><th>설명</th></tr>
+  <tr><td>개념이해형</td><td class="center">35%</td><td class="center">17~18</td><td>용어, 원리, 기본 개념 확인</td></tr>
+  <tr><td>도구활용형</td><td class="center">30%</td><td class="center">15</td><td>AI 도구 선택, 기능 활용, 결과 해석</td></tr>
+  <tr><td>프롬프트기초형</td><td class="center">20%</td><td class="center">10</td><td>역할·맥락·조건·출력 형식 지정</td></tr>
+  <tr><td>윤리·보안판단형</td><td class="center">15%</td><td class="center">7~8</td><td>개인정보, 저작권, 보안, 책임 있는 활용</td></tr>
+</table>
+
+<div class="note">
+  <strong>유형 혼합 가이드:</strong> 과목과 문항유형이 1:1로 고정되지 않도록 주의한다. 예를 들어 "AI 기본 이해" 과목에서도 윤리·보안판단형 1~2문항을 섞고, "AI 도구 활용 기초" 과목에서도 개념이해형 1~2문항을 포함할 수 있다.
+</div>
+
+
+<!-- ═══ AXIS-C L3 ═══ -->
+<h2>3. AXIS-C L3 출제기준표</h2>
+
+<h3>과목별 출제 기준</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">배점</th><th>세부 출제영역</th><th>주 문항유형</th></tr>
+  <tr><td><strong>AI 코딩 기본 이해</strong></td><td class="center">15</td><td class="center">30점</td><td>AI 코딩 개념, 도구 생태계(ChatGPT·Claude·Cursor·Copilot), 프로그래밍 기초, AI 코딩의 한계</td><td>개념이해형</td></tr>
+  <tr><td><strong>AI 코딩 도구 활용 기초</strong></td><td class="center">15</td><td class="center">30점</td><td>코드 생성 요청, 실행 환경(브라우저·터미널·IDE), 에러 메시지 이해, 단순 수정</td><td>도구활용형</td></tr>
+  <tr><td><strong>코드 읽기·프롬프트 기초</strong></td><td class="center">10</td><td class="center">20점</td><td>코드 목적·입출력 파악, 함수·변수·흐름 이해, 코드 요청 프롬프트 구조</td><td>코드읽기형 7문항<br>+ 프롬프트기초형 3문항</td></tr>
+  <tr><td><strong>AI 코딩 윤리·보안 기초</strong></td><td class="center">10</td><td class="center">20점</td><td>API 키·비밀번호 입력 금지, 오픈소스 라이선스, 개인정보, 코드 검증</td><td>윤리·보안판단형</td></tr>
+</table>
+
+<h3>과목별 난이도 배분 가이드</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">하</th><th class="center">중</th><th class="center">상</th></tr>
+  <tr><td><strong>AI 코딩 기본 이해</strong></td><td class="center">15</td><td class="center">6</td><td class="center">7</td><td class="center">2</td></tr>
+  <tr><td><strong>AI 코딩 도구 활용 기초</strong></td><td class="center">15</td><td class="center">6</td><td class="center">7</td><td class="center">2</td></tr>
+  <tr><td><strong>코드 읽기·프롬프트 기초</strong></td><td class="center">10</td><td class="center">4</td><td class="center">4~5</td><td class="center">1~2</td></tr>
+  <tr><td><strong>AI 코딩 윤리·보안 기초</strong></td><td class="center">10</td><td class="center">4</td><td class="center">4~5</td><td class="center">1~2</td></tr>
+  <tr><td><strong>합계</strong></td><td class="center"><strong>50</strong></td><td class="center"><strong>20</strong></td><td class="center"><strong>22~23</strong></td><td class="center"><strong>7~8</strong></td></tr>
+</table>
+
+<h3>문항유형 비율</h3>
+<table>
+  <tr><th>문항유형</th><th class="center">비율</th><th class="center">문항 수</th><th>설명</th></tr>
+  <tr><td>개념이해형</td><td class="center">25%</td><td class="center">12~13</td><td>AI 코딩 개념, 도구 비교</td></tr>
+  <tr><td>도구활용형</td><td class="center">25%</td><td class="center">12~13</td><td>코드 생성 요청, 실행 환경 설정</td></tr>
+  <tr><td>코드읽기형</td><td class="center">35%</td><td class="center">17~18</td><td>코드 목적·입출력·오류·보안 판단</td></tr>
+  <tr><td>윤리·보안판단형</td><td class="center">15%</td><td class="center">7~8</td><td>API 키, 라이선스, 개인정보</td></tr>
+</table>
+
+<div class="note">
+  <strong>AXIS-C 코드읽기형 비율 근거:</strong> AXIS-C는 "AI가 만든 코드를 읽고 이해하는 능력"이 핵심이므로 코드읽기형을 35%로 가장 높게 설정한다. 코드 스니펫을 제시하고 목적·입출력·오류를 판단하는 문항이 중심이다.
+</div>
+
+
+<!-- ═══ AXIS-H L3 ═══ -->
+<h2>4. AXIS-H L3 출제기준표</h2>
+
+<h3>과목별 출제 기준</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">배점</th><th>세부 출제영역</th><th>주 문항유형</th></tr>
+  <tr><td><strong>AI 기본 이해</strong></td><td class="center">15</td><td class="center">30점</td><td>생성형 AI 개념, 의료기관 디지털 전환, AI의 한계, 의료 AI vs 업무 AI 구분</td><td>개념이해형</td></tr>
+  <tr><td><strong>의료기관 업무 AI 활용 기초</strong></td><td class="center">15</td><td class="center">30점</td><td>원무·행정·CS·병동 지원 업무의 AI 활용, 부서별 AI 적용점</td><td>의료맥락판단형</td></tr>
+  <tr><td><strong>프롬프트 기초와 산출물 검증</strong></td><td class="center">10</td><td class="center">20점</td><td>의료기관 맥락 프롬프트, 환자 안내문 검증, 할루시네이션 식별</td><td>프롬프트기초형 4문항<br>+ 산출물검증형 6문항</td></tr>
+  <tr><td><strong>의료기관 AI 윤리·보안·저작권</strong></td><td class="center">10</td><td class="center">20점</td><td>환자정보보호(이름·등록번호·진단명 입력 금지), 의료윤리, 저작권</td><td>윤리·보안판단형</td></tr>
+</table>
+
+<h3>과목별 난이도 배분 가이드</h3>
+<table>
+  <tr><th>과목</th><th class="center">문항 수</th><th class="center">하</th><th class="center">중</th><th class="center">상</th></tr>
+  <tr><td><strong>AI 기본 이해</strong></td><td class="center">15</td><td class="center">6</td><td class="center">7</td><td class="center">2</td></tr>
+  <tr><td><strong>의료기관 업무 AI 활용 기초</strong></td><td class="center">15</td><td class="center">6</td><td class="center">7</td><td class="center">2</td></tr>
+  <tr><td><strong>프롬프트 기초와 산출물 검증</strong></td><td class="center">10</td><td class="center">4</td><td class="center">4~5</td><td class="center">1~2</td></tr>
+  <tr><td><strong>의료기관 AI 윤리·보안·저작권</strong></td><td class="center">10</td><td class="center">4</td><td class="center">4~5</td><td class="center">1~2</td></tr>
+  <tr><td><strong>합계</strong></td><td class="center"><strong>50</strong></td><td class="center"><strong>20</strong></td><td class="center"><strong>22~23</strong></td><td class="center"><strong>7~8</strong></td></tr>
+</table>
+
+<h3>문항유형 비율</h3>
+<table>
+  <tr><th>문항유형</th><th class="center">비율</th><th class="center">문항 수</th><th>설명</th></tr>
+  <tr><td>개념이해형</td><td class="center">25%</td><td class="center">12~13</td><td>AI 개념, 의료기관 디지털 전환</td></tr>
+  <tr><td>의료맥락판단형</td><td class="center">30%</td><td class="center">15</td><td>의료기관 비임상 업무 상황 판단</td></tr>
+  <tr><td>산출물검증형</td><td class="center">20%</td><td class="center">10</td><td>환자 안내문·보고서의 오류·안전성 검토</td></tr>
+  <tr><td>윤리·보안판단형</td><td class="center">25%</td><td class="center">12~13</td><td>환자정보보호, 의료윤리, 저작권</td></tr>
+</table>
+
+<div class="note warn">
+  <strong>AXIS-H 윤리·보안 비율 근거:</strong> 의료기관은 환자정보보호가 특히 중요하므로 윤리·보안판단형을 25%(AXIS 15% 대비 10%p 높음)로 설정한다.
+</div>
+
+<div class="note danger">
+  <strong>AXIS-H 절대 금지:</strong> "이 증상은 ~입니다", "약을 ~하세요", "검사를 받지 않아도 됩니다" 등 임상 판단 표현은 문항 본문·선택지·정답해설 어디에도 포함할 수 없다.
+</div>
+
+
+<!-- ══════════════════════════════════════ -->
+<div class="part-label">Part B — 객관식 문항작성 컬럼표</div>
+<!-- ══════════════════════════════════════ -->
+
+<h2>5. 객관식 컬럼표</h2>
+<p>출제위원이 엑셀(또는 CSV)에 문항을 작성할 때 사용하는 양식입니다. 한 행(줄)에 하나의 문항을 입력합니다.</p>
+
+<table>
+  <tr><th style="width:150px">컬럼명</th><th style="width:80px">필수 여부</th><th>입력 예시</th><th>설명</th></tr>
+  <tr><td><strong>no</strong></td><td><span class="req">필수</span></td><td>1</td><td>문항 번호 (순번)</td></tr>
+  <tr><td><strong>cert_type</strong></td><td><span class="req">필수</span></td><td>AXIS</td><td>자격 구분: AXIS / AXIS-C / AXIS-H</td></tr>
+  <tr><td><strong>level</strong></td><td><span class="req">필수</span></td><td>L3</td><td>등급: L3 / L2 / L1</td></tr>
+  <tr><td><strong>subject</strong></td><td><span class="req">필수</span></td><td>AI 기본 이해</td><td>검정과목명 (출제기준표의 과목명과 일치)</td></tr>
+  <tr><td><strong>domain_area</strong></td><td><span class="rec">권장</span></td><td>생성형 AI 개념</td><td>세부 출제영역 (출제기준표의 세부영역 참조)</td></tr>
+  <tr><td><strong>q_type</strong></td><td><span class="req">필수</span></td><td>multiple_choice</td><td>문항 대분류. <strong>L3는 multiple_choice만 사용</strong></td></tr>
+  <tr><td><strong>item_purpose</strong></td><td><span class="rec">권장</span></td><td>concept</td><td>문항 목적 (자격별 사용 가능 값은 아래 6-1 표 참조)</td></tr>
+  <tr><td><strong>difficulty</strong></td><td><span class="rec">권장</span></td><td>medium</td><td>난이도: easy / medium / hard</td></tr>
+  <tr><td><strong>content</strong></td><td><span class="req">필수</span></td><td>다음 중 생성형 AI의 특징으로 가장 적절한 것은?</td><td>문항 본문</td></tr>
+  <tr><td><strong>option_a</strong></td><td><span class="req">필수</span></td><td>학습 데이터를 기반으로 새로운 콘텐츠를 생성한다</td><td>선택지 A</td></tr>
+  <tr><td><strong>option_b</strong></td><td><span class="req">필수</span></td><td>기존 데이터를 검색하여 원본을 그대로 보여준다</td><td>선택지 B</td></tr>
+  <tr><td><strong>option_c</strong></td><td><span class="req">필수</span></td><td>데이터베이스에서 정답을 찾아 반환한다</td><td>선택지 C</td></tr>
+  <tr><td><strong>option_d</strong></td><td><span class="req">필수</span></td><td>사용자가 입력한 내용을 그대로 복사하여 출력한다</td><td>선택지 D</td></tr>
+  <tr><td><strong>correct_answer</strong></td><td><span class="req">필수</span></td><td>A</td><td>정답키: A / B / C / D</td></tr>
+  <tr><td><strong>points</strong></td><td><span class="req">필수</span></td><td>2</td><td>문항 배점. <strong>L3는 전 문항 2점 고정</strong></td></tr>
+  <tr><td><strong>explanation</strong></td><td><span class="req">필수</span></td><td>정답은 A입니다. 생성형 AI는 학습 데이터의 패턴을 바탕으로 새로운 텍스트, 이미지 등을 생성합니다. 검색 엔진과 달리 확률 기반으로 새로운 결과물을 만들어내므로, AI 산출물은 항상 정확성을 검증해야 합니다.</td><td><strong>정답해설.</strong> 정답 근거 + 핵심 판단 기준 + 주의사항. 3~5문장 이상 권장</td></tr>
+  <tr><td><strong>source_ref</strong></td><td><span class="opt">선택</span></td><td>AXIS L3 과목1 생성형AI개념</td><td>출제근거 (출제기준표 과목·영역 참조)</td></tr>
+  <tr><td><strong>shuffle_exempt</strong></td><td><span class="opt">선택</span></td><td>FALSE</td><td>선택지 셔플 제외 여부 (아래 6-2 참조)</td></tr>
+  <tr><td><strong>review_status</strong></td><td><span class="rec">권장</span></td><td>draft</td><td>검수 상태: draft / reviewed / approved / rejected</td></tr>
+  <tr><td><strong>review_comment</strong></td><td><span class="opt">선택</span></td><td>정답해설 보완 필요</td><td>검수위원 의견</td></tr>
+  <tr><td><strong>version</strong></td><td><span class="req">필수</span></td><td>1</td><td>문항 버전 (수정 시 증가)</td></tr>
+  <tr><td><strong>created_by</strong></td><td><span class="rec">권장</span></td><td>홍길동</td><td>출제자 이름</td></tr>
+  <tr><td><strong>created_date</strong></td><td><span class="rec">권장</span></td><td>2026-05-01</td><td>작성 일자</td></tr>
+</table>
+
+
+<!-- ═══ 보조 설명 ═══ -->
+<h2>6. 컬럼 작성 보조 안내</h2>
+
+<h3>6-1. item_purpose — 자격별 사용 가능 값</h3>
+<p>출제위원은 자신이 담당하는 자격에 해당하는 값만 사용합니다.</p>
+
+<table>
+  <tr><th>입력 코드</th><th>한글 명칭</th><th class="center">AXIS</th><th class="center">AXIS-C</th><th class="center">AXIS-H</th></tr>
+  <tr><td><strong>concept</strong></td><td>개념이해형</td><td class="center">✅</td><td class="center">✅</td><td class="center">✅</td></tr>
+  <tr><td><strong>tool_use</strong></td><td>도구활용형</td><td class="center">✅</td><td class="center">✅</td><td class="center">✅</td></tr>
+  <tr><td><strong>prompt_basic</strong></td><td>프롬프트기초형</td><td class="center">✅</td><td class="center">✅</td><td class="center">✅</td></tr>
+  <tr><td><strong>ethics_security</strong></td><td>윤리·보안판단형</td><td class="center">✅</td><td class="center">✅</td><td class="center">✅</td></tr>
+  <tr><td><strong>code_reading</strong></td><td>코드읽기형</td><td class="center">—</td><td class="center">✅</td><td class="center">—</td></tr>
+  <tr><td><strong>healthcare_context</strong></td><td>의료맥락판단형</td><td class="center">—</td><td class="center">—</td><td class="center">✅</td></tr>
+  <tr><td><strong>output_review</strong></td><td>산출물검증형</td><td class="center">—</td><td class="center">—</td><td class="center">✅</td></tr>
+</table>
+
+<div class="note">
+  <strong>L2·L1에서 추가로 사용하는 값 (L3에서는 사용 안 함):</strong>
+  case_judgment (사례판단형), debugging (디버깅판단형), governance (전략·거버넌스형)
+</div>
+
+<h3>6-2. shuffle_exempt — 언제 TRUE로 설정하는가?</h3>
+<p>대부분의 문항은 <strong>FALSE</strong>(셔플 허용)입니다. 아래 경우에만 TRUE로 설정합니다.</p>
+
+<table>
+  <tr><th>TRUE로 설정하는 경우</th><th>예시</th></tr>
+  <tr><td>선택지가 순서(절차)여서 섞으면 의미가 없어지는 경우</td><td>"AI 활용 업무 절차를 올바른 순서대로 나열한 것은?"<br>→ ①요구사항 정의 ②AI에 요청 ③결과 검증 ④최종 반영</td></tr>
+  <tr><td>선택지가 "위의 모든 것"을 포함하는 경우</td><td>D 선택지가 "위의 A, B, C 모두 해당한다"인 문항</td></tr>
+</table>
+
+<h3>6-3. 정답해설(explanation) 작성 기준</h3>
+<p>정답해설은 수험생이 시험 후 결과 화면에서 확인하는 피드백입니다. 별도 오답해설은 작성하지 않습니다.</p>
+
+<table>
+  <tr><th>구성 요소</th><th>작성 방법</th></tr>
+  <tr><td><strong>① 정답 표시</strong></td><td>"정답은 A입니다." 처럼 정답을 먼저 명확히 제시</td></tr>
+  <tr><td><strong>② 정답 근거</strong></td><td>왜 이 선택지가 가장 적절한지 설명</td></tr>
+  <tr><td><strong>③ 핵심 판단 기준</strong></td><td>이 문항이 확인하려는 실무 판단 기준 설명</td></tr>
+  <tr><td><strong>④ 주의사항 (필요 시)</strong></td><td>보안, 저작권, 환자정보보호 등 유의점</td></tr>
+</table>
+
+<div class="note">
+  <strong>분량 기준:</strong> 최소 3~5문장 이상. "A가 맞습니다"로 끝내지 말고, 핵심 판단 기준까지 설명해야 합니다.
+</div>
+
+
+<h2>7. 검수 기준표</h2>
+<p>검수위원이 각 문항을 확인할 때 사용하는 체크리스트입니다.</p>
+
+<table>
+  <tr><th>검수 항목</th><th>확인 기준</th></tr>
+  <tr><td><strong>정답 명확성</strong></td><td>하나의 최선 정답만 존재하는가? 2개 이상 정답으로 볼 수 있는 보기가 없는가?</td></tr>
+  <tr><td><strong>보기 품질</strong></td><td>보기 간 길이와 표현 수준이 유사한가? 정답만 유독 길거나 짧지 않은가?</td></tr>
+  <tr><td><strong>난이도 적정성</strong></td><td>지정한 난이도(easy/medium/hard)와 실제 체감 난이도가 일치하는가?</td></tr>
+  <tr><td><strong>출제근거</strong></td><td>출제기준표의 과목·세부영역과 연결되는가?</td></tr>
+  <tr><td><strong>정답해설 품질</strong></td><td>정답 근거와 핵심 판단 기준이 충분한가? 3문장 이상인가?</td></tr>
+  <tr><td><strong>표현 명확성</strong></td><td>문항 표현이 모호하지 않은가? 이중 부정이나 헷갈리는 표현이 없는가?</td></tr>
+  <tr><td><strong>문항 독립성</strong></td><td>이 문항의 정답이 다른 문항의 단서가 되지 않는가?</td></tr>
+  <tr><td><strong>보안·윤리</strong></td><td>개인정보·저작권·보안 리스크가 포함되지 않았는가?</td></tr>
+  <tr><td><strong>AXIS-C 전용</strong></td><td>코드 스니펫이 실행 가능한가? 보안 위험은 없는가?</td></tr>
+  <tr><td><strong>AXIS-H 전용</strong></td><td>진단·치료·처방 오인 표현이 없는가? 환자정보가 포함되지 않았는가?</td></tr>
+</table>
+
+
+<h2>8. 1차 문제은행 구축 순서</h2>
+
+<table>
+  <tr><th>순서</th><th>작업</th><th>목표</th></tr>
+  <tr><td><strong>1</strong></td><td>자격별 L3 샘플 20문항 작성 (과목당 5문항)</td><td>양식 검증, 난이도 확인, 정답해설 품질 확인</td></tr>
+  <tr><td><strong>2</strong></td><td>샘플 검수 → 양식·기준 보완</td><td>컬럼표·출제기준 최종 확정</td></tr>
+  <tr><td><strong>3</strong></td><td>자격별 L3 200문항 작성</td><td>1차 오픈용 문제은행 완성</td></tr>
+  <tr><td><strong>4</strong></td><td>문제은행 시스템 등록 테스트</td><td>DB 업로드·조회 정상 작동 확인</td></tr>
+  <tr><td><strong>5</strong></td><td>CBT 랜덤 출제 + 자동채점 테스트</td><td>시험 운영 안정성 확인</td></tr>
+</table>
+
+<div class="note ok">
+  <strong>이 문서의 범위:</strong> 본 문서는 L3 전용입니다. L2·L1 출제기준표와 실기과제 컬럼표는 L3 문제은행 구축 완료 후 별도 작성합니다.
+</div>
+
+
+<footer class="footer">
+  ㈜AiNex · AiNexEdu · L3 출제기준표 및 객관식 문항작성 컬럼표 v1.1
+</footer>
+
+</div>
+</body>
+</html>

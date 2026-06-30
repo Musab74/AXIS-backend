@@ -38,6 +38,14 @@ enum CertLevel {
   L1
 }
 
+/// L1 eligibility document review state. Gates the REAL exam; demo is unaffected.
+enum EligibilityStatus {
+  NOT_REQUIRED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum ScheduleStatus {
   UPCOMING
   REGISTRATION_OPEN
@@ -77,32 +85,65 @@ enum PenaltyStatus {
   RELEASED
 }
 
+enum ProctorEventType {
+  FACE_NOT_DETECTED
+  MULTIPLE_FACES
+  PHONE_DETECTED
+  TAB_SWITCH
+  FULLSCREEN_EXIT
+  COPY_PASTE
+  RIGHT_CLICK
+  AI_FLAG
+  AI_FLAG_SUSPICIOUS
+  AI_FLAG_CONFIRMED
+  AUDIO_HIGH
+  MANUAL_FLAG
+  // ─── Additive (proctor v2 — gaze + page-leave detection) ──────────────
+  // Appended to the END so MySQL ENUM ordinals are preserved on existing
+  // rows. Do NOT reorder. See prisma/migrations/manual-add-proctor-event-types.sql.
+  NO_FACE
+  GAZE_AWAY
+  EYES_CLOSED
+  IDENTITY_MISMATCH
+  WINDOW_BLUR
+  TAB_HIDDEN
+  BEFORE_UNLOAD
+  KEY_BLOCKED
+  EXTERNAL_DISPLAY
+  POSSIBLE_MIRROR
+}
+
 // ═══════════════════════════════════════════════════════════
 // USER & AUTH
 // ═══════════════════════════════════════════════════════════
 
 model User {
-  id            String        @id @default(cuid())
-  userId        String        @unique @map("user_id")
-  email         String?       @unique
-  passwordHash  String        @map("password_hash")
-  name          String
-  phone         String
-  birthDate     String?       @map("birth_date")
-  gender        String?
-  ci            String?       @unique @db.VarChar(500)
-  di            String?       @db.VarChar(500)
-  niceVerified  Boolean       @default(false) @map("nice_verified")
-  accountStatus AccountStatus @default(ACTIVE) @map("account_status")
-  createdAt     DateTime      @default(now()) @map("created_at")
-  updatedAt     DateTime      @updatedAt @map("updated_at")
-  lastLoginAt   DateTime?     @map("last_login_at")
+  id                     String        @id @default(cuid())
+  userId                 String        @unique @map("user_id")
+  email                  String?       @unique
+  passwordHash           String        @map("password_hash")
+  name                   String
+  phone                  String
+  birthDate              String?       @map("birth_date")
+  gender                 String?
+  ci                     String?       @unique @db.VarChar(500)
+  di                     String?       @db.VarChar(500)
+  niceVerified           Boolean       @default(false) @map("nice_verified")
+  accountStatus          AccountStatus @default(ACTIVE) @map("account_status")
+  referenceFaceImage     Bytes?        @map("reference_face_image") @db.LongBlob
+  referenceFaceUpdatedAt DateTime?     @map("reference_face_updated_at")
+  createdAt              DateTime      @default(now()) @map("created_at")
+  updatedAt              DateTime      @updatedAt @map("updated_at")
+  lastLoginAt            DateTime?     @map("last_login_at")
 
-  roles         UserRole[]
-  consents      ConsentLog[]
-  penalties     UserPenalty[]
-  registrations Registration[]
-  examSessions  ExamSession[]
+  roles               UserRole[]
+  consents            ConsentLog[]
+  penalties           UserPenalty[]
+  registrations       Registration[]
+  examSessions        ExamSession[]
+  inquiries           Inquiry[]
+  demoProctoringEvents DemoProctoringEvent[]
+  expertCompetencies  ExpertCompetency[]
 
   @@map("users")
 }
@@ -119,6 +160,25 @@ model UserRole {
 
   @@unique([userId, role])
   @@map("user_roles")
+}
+
+/// Per-series grading scope for an EXPERT grader. The spec keeps the expert
+/// review pool separated by series (AXIS / AXIS-H / AXIS-C), so an expert only
+/// sees grading-queue items whose certType is in their competencies — e.g. a
+/// coding expert (AXIS_C) only sees coding tasks. Admins (SUPER_ADMIN /
+/// GRADING_ADMIN) are not constrained by this table.
+model ExpertCompetency {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  certType  CertType @map("cert_type")
+  grantedBy String?  @map("granted_by")
+  grantedAt DateTime @default(now()) @map("granted_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, certType])
+  @@index([certType])
+  @@map("expert_competencies")
 }
 
 model UserPenalty {
@@ -260,6 +320,15 @@ model Registration {
   partialExempt         Boolean            @default(false) @map("partial_exempt")
   exemptSourceSessionId String?            @map("exempt_source_session_id")
   seatHeldUntil         DateTime?          @map("seat_held_until")
+  examDeadline          DateTime?          @map("exam_deadline")
+  supportDocUrl         String?            @map("support_doc_url") @db.Text
+  /// L1 eligibility: applicant-declared basis (L2_CERT / MANAGER_EXP / PREP_COURSE).
+  eligibilityType       String?            @map("eligibility_type")
+  /// L1 eligibility review state. Gates entry to the REAL exam (demo is always allowed).
+  eligibilityStatus     EligibilityStatus  @default(NOT_REQUIRED) @map("eligibility_status")
+  eligibilityReviewedBy String?            @map("eligibility_reviewed_by")
+  eligibilityReviewedAt DateTime?          @map("eligibility_reviewed_at")
+  eligibilityNote       String?            @map("eligibility_note") @db.Text
   cancelledAt           DateTime?          @map("cancelled_at")
   createdAt             DateTime           @default(now()) @map("created_at")
   updatedAt             DateTime           @updatedAt @map("updated_at")
@@ -344,6 +413,21 @@ model QuestionBank {
   active        Boolean      @default(true)
   createdAt     DateTime     @default(now()) @map("created_at")
 
+  // Authoring metadata imported from the question CSVs (seed-questions-csv.ts).
+  no            Int?
+  domainArea    String?      @map("domain_area")
+  qType         String?      @map("q_type")
+  itemPurpose   String?      @map("item_purpose")
+  difficulty    String?
+  explanation   String?      @db.Text
+  sourceRef     String?      @map("source_ref")
+  shuffleExempt Boolean      @default(false) @map("shuffle_exempt")
+  reviewStatus  String?      @map("review_status")
+  reviewComment String?      @map("review_comment")
+  createdBy     String?      @map("created_by")
+  createdDate   DateTime?    @map("created_date")
+
+  @@unique([certType, level, no])
   @@index([certType, level, subjectIndex, active])
   @@map("question_bank")
 }
@@ -361,34 +445,65 @@ model TaskTemplate {
   orderIndex  Int      @default(0) @map("order_index")
   createdAt   DateTime @default(now()) @map("created_at")
 
+  // Authoring metadata imported from the practical (실기) CSVs (seed-questions-csv.ts).
+  setNo              Int?      @map("set_no")
+  taskType           String?   @map("task_type")
+  timeLimit          Int?      @map("time_limit")
+  sampleData         String?   @db.Text @map("sample_data")
+  requiredStructure  String?   @db.Text @map("required_structure")
+  forbiddenRules     String?   @db.Text @map("forbidden_rules")
+  aiToolAllowed      String?   @map("ai_tool_allowed")
+  maxScore           Int?      @map("max_score")
+  modelAnswer        String?   @db.Text @map("model_answer")
+  riskCriteria       String?   @db.Text @map("risk_criteria")
+  benchmarkExcellent String?   @db.Text @map("benchmark_excellent")
+  benchmarkNormal    String?   @db.Text @map("benchmark_normal")
+  benchmarkBorderline String?  @db.Text @map("benchmark_borderline")
+  benchmarkFail      String?   @db.Text @map("benchmark_fail")
+  aiPromptVersion    String?   @map("ai_prompt_version")
+  reviewStatus       String?   @map("review_status")
+  reviewComment      String?   @map("review_comment")
+  version            Int       @default(1)
+  createdBy          String?   @map("created_by")
+  createdDate        DateTime? @map("created_date")
+  isActive           Boolean   @default(true) @map("is_active")
+
+  @@unique([certType, level, setNo, taskType])
   @@index([certType, level, part])
   @@map("task_templates")
 }
 
 model ExamSession {
-  id             String            @id @default(cuid())
-  userId         String            @map("user_id")
-  registrationId String?           @map("registration_id")
-  certType       CertType          @map("cert_type")
-  level          CertLevel
-  attemptNo      Int               @default(1) @map("attempt_no")
-  status         ExamSessionStatus @default(CREATED)
-  paperSeed      String?           @map("paper_seed")
-  startedAt      DateTime?         @map("started_at")
-  hardDeadline   DateTime?         @map("hard_deadline")
-  submittedAt    DateTime?         @map("submitted_at")
-  totalScore     Int?              @map("total_score")
-  writtenScore   Int?              @map("written_score")
-  practicalScore Int?              @map("practical_score")
-  passed         Boolean?
-  failReason     String?           @map("fail_reason") @db.Text
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
+  id              String            @id @default(cuid())
+  userId          String            @map("user_id")
+  registrationId  String?           @map("registration_id")
+  certType        CertType          @map("cert_type")
+  level           CertLevel
+  attemptNo       Int               @default(1) @map("attempt_no")
+  status          ExamSessionStatus @default(CREATED)
+  paperSeed       String?           @map("paper_seed")
+  startedAt       DateTime?         @map("started_at")
+  hardDeadline    DateTime?         @map("hard_deadline")
+  submittedAt     DateTime?         @map("submitted_at")
+  totalScore      Int?              @map("total_score")
+  writtenScore    Int?              @map("written_score")
+  practicalScore  Int?              @map("practical_score")
+  passed          Boolean?
+  failReason      String?           @map("fail_reason") @db.Text
+  proctorWarnings Int               @default(0) @map("proctor_warnings")
+  /// Expert grader (User.id) assigned to review this session's practical.
+  assignedExpertId String?          @map("assigned_expert_id")
+  /// Set by AI prescore when a spec trigger fires (low confidence / risk flag /
+  /// boundary score) so graders prioritize mandatory human scrutiny.
+  mandatoryReview Boolean           @default(false) @map("mandatory_review")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
 
-  user           User            @relation(fields: [userId], references: [id])
-  answers        Answer[]
-  essayAnswers   EssayAnswer[]
-  gradingResults GradingResult[]
+  user             User              @relation(fields: [userId], references: [id])
+  answers          Answer[]
+  essayAnswers     EssayAnswer[]
+  gradingResults   GradingResult[]
+  proctoringEvents ProctoringEvent[]
 
   @@index([userId])
   @@index([status])
@@ -432,6 +547,18 @@ model EssayAnswer {
   expertNotes   String?  @map("expert_notes") @db.Text
   updatedAt     DateTime @updatedAt @map("updated_at")
 
+  // AI first-pass grading detail (ClaudeEssayGraderService). aiPreScore above
+  // holds the headline % so existing queue/state logic keeps working; these
+  // capture the structured verdict + audit fields (brief §5/§8).
+  aiCriterionScores Json?     @map("ai_criterion_scores")
+  aiRiskFlags       Json?     @map("ai_risk_flags")
+  aiBand            String?   @map("ai_band")
+  aiConfidence      Float?    @map("ai_confidence")
+  aiModel           String?   @map("ai_model")
+  aiPromptHash      String?   @map("ai_prompt_hash")
+  aiLatencyMs       Int?      @map("ai_latency_ms")
+  aiScoredAt        DateTime? @map("ai_scored_at")
+
   session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, taskId])
@@ -455,4 +582,253 @@ model GradingResult {
 
   @@index([sessionId])
   @@map("grading_results")
+}
+
+// ── Hybrid grading engine (brief milestones 5–7) ────────────────────────────
+
+enum CalibrationStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+enum ScoringRound {
+  FIRST // 1차
+  SECOND // 2차
+  ADJUST // 조정
+}
+
+/// One calibration cycle for a TaskTemplate: experts + the AI score the task's
+/// benchmark exemplars; we compute expert variance, AI-vs-expert delta and
+/// high-risk flag recall, then gate whether AI auto-finalize is allowed.
+model CalibrationRun {
+  id             String            @id @default(cuid())
+  taskId         String            @map("task_id")
+  status         CalibrationStatus @default(PENDING)
+  expertVariance Float?            @map("expert_variance")
+  aiExpertDelta  Float?            @map("ai_expert_delta")
+  confidenceAvg  Float?            @map("confidence_avg")
+  tolerancePassed Boolean          @default(false) @map("tolerance_passed")
+  flagRecallOk   Boolean           @default(false) @map("flag_recall_ok")
+  notes          String?           @db.Text
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  scores CalibrationScore[]
+
+  @@index([taskId])
+  @@map("calibration_runs")
+}
+
+/// A single rating of one benchmark anchor, by an expert or the AI.
+model CalibrationScore {
+  id         String   @id @default(cuid())
+  runId      String   @map("run_id")
+  raterType  String   @map("rater_type") // 'expert' | 'ai'
+  raterId    String?  @map("rater_id")
+  anchorBand String   @map("anchor_band") // excellent | normal | borderline | fail
+  total      Int
+  flagged    Boolean  @default(false) // for high_risk anchors: did the rater catch the flag
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  run CalibrationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@map("calibration_scores")
+}
+
+/// Per-grader, per-round expert scoring record (brief §5). One row per
+/// (session, task, rater, round). Final sign-off carries finalAuthority.
+model ExpertScoringRecord {
+  id                  String       @id @default(cuid())
+  sessionId           String       @map("session_id")
+  taskId              String       @map("task_id")
+  raterId             String       @map("rater_id")
+  scoringRound        ScoringRound @map("scoring_round")
+  criterionScores     Json         @map("criterion_scores")
+  total               Int
+  riskFlagsDetected   Json?        @map("risk_flags_detected")
+  confidenceComment   String?      @map("confidence_comment") @db.Text
+  adjudicationRequired Boolean     @default(false) @map("adjudication_required")
+  finalDecision       String?      @map("final_decision") // 'pass' | 'fail' | null until sign-off
+  finalAuthority      String?      @map("final_authority") // raterId of the chief examiner
+  createdAt           DateTime     @default(now()) @map("created_at")
+
+  @@index([sessionId])
+  @@index([sessionId, taskId])
+  @@map("expert_scoring_records")
+}
+
+/// Append-only audit trail for every grading score change / finalize / publish
+/// (brief §7/§8). Replaces the prior stdout-only logging.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String   @map("actor_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  before     Json?
+  after      Json?
+  reason     String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+model ProctoringEvent {
+  id           String           @id @default(cuid())
+  sessionId    String           @map("session_id")
+  eventType    ProctorEventType @map("event_type")
+  severity     String           @default("warning")
+  captionKo    String?          @map("caption_ko") @db.Text
+  captionEn    String?          @map("caption_en") @db.Text
+  evidenceUrl  String?          @map("evidence_url") @db.Text
+  videoClipUrl String?          @map("video_clip_url") @db.Text
+  retainUntil  DateTime?        @map("retain_until")
+  metadata     Json?
+  reviewed     Boolean          @default(false)
+  reviewedBy   String?          @map("reviewed_by")
+  reviewedAt   DateTime?        @map("reviewed_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([eventType])
+  @@map("proctoring_events")
+}
+
+// Demo runs aren't bound to an ExamSession but we still want to persist
+// the captured screenshots / voice clips so the user can revisit them
+// from MyPage. Stored separately from `proctoring_events` to keep real
+// exam evidence cleanly isolated.
+model DemoProctoringEvent {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  kind         String    @db.VarChar(64)
+  severity     String    @default("warning")
+  captionKo    String?   @map("caption_ko") @db.Text
+  captionEn    String?   @map("caption_en") @db.Text
+  evidenceUrl  String?   @map("evidence_url") @db.Text
+  videoClipUrl String?   @map("video_clip_url") @db.Text
+  retainUntil  DateTime? @map("retain_until")
+  metadata     Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("demo_proctoring_events")
+}
+
+// ═══════════════════════════════════════════════════════════
+// Q&A / INQUIRY SYSTEM
+// ═══════════════════════════════════════════════════════════
+
+enum InquiryStatus {
+  PENDING
+  ANSWERED
+  CLOSED
+}
+
+enum InquiryCategory {
+  REGISTRATION
+  PAYMENT
+  EXAM
+  TECHNICAL
+  CERTIFICATE
+  OTHER
+}
+
+model Inquiry {
+  id         String          @id @default(cuid())
+  userId     String          @map("user_id")
+  category   InquiryCategory @default(OTHER)
+  title      String
+  content    String          @db.Text
+  status     InquiryStatus   @default(PENDING)
+  isPublic   Boolean         @default(false) @map("is_public")
+  createdAt  DateTime        @default(now()) @map("created_at")
+  updatedAt  DateTime        @updatedAt @map("updated_at")
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replies InquiryReply[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([category])
+  @@map("inquiries")
+}
+
+model InquiryReply {
+  id         String   @id @default(cuid())
+  inquiryId  String   @map("inquiry_id")
+  authorId   String   @map("author_id")
+  content    String   @db.Text
+  isAdmin    Boolean  @default(false) @map("is_admin")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  inquiry Inquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+
+  @@index([inquiryId])
+  @@map("inquiry_replies")
+}
+
+// ═══════════════════════════════════════════════════════════
+// NOTICES & FAQ (Customer Service Center)
+// ═══════════════════════════════════════════════════════════
+
+enum NoticeTagType {
+  IMPORTANT
+  NORMAL
+}
+
+enum NoticeStatus {
+  PUBLISHED
+  DRAFT
+}
+
+model Notice {
+  id        String        @id @default(cuid())
+  tag       String
+  tagType   NoticeTagType @default(NORMAL) @map("tag_type")
+  title     String
+  content   String        @db.Text
+  status    NoticeStatus  @default(DRAFT)
+  pinned    Boolean       @default(false)
+  views     Int           @default(0)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([pinned])
+  @@map("notices")
+}
+
+enum FaqCategory {
+  REGISTRATION
+  EXAM
+  PASS
+  REFUND
+  ENVIRONMENT
+  CERTIFICATE
+  OTHER
+}
+
+model Faq {
+  id        String      @id @default(cuid())
+  category  FaqCategory @default(OTHER)
+  question  String      @db.Text
+  answer    String      @db.Text
+  sortOrder Int         @default(0) @map("sort_order")
+  pinned    Boolean     @default(false)
+  published Boolean     @default(true)
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  @@index([category])
+  @@index([sortOrder])
+  @@map("faqs")
 }

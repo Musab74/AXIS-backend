@@ -13,9 +13,10 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
   AXIS: {
     L3: {
       written: [
-        { name: 'AI Fundamentals & Tools', qs: 20, pts: 2 },
-        { name: 'Prompt Design & Output Quality', qs: 20, pts: 2 },
-        { name: 'AI Ethics & Practical Application', qs: 10, pts: 2 },
+        { name: 'AI Fundamentals', qs: 15, pts: 2 },
+        { name: 'AI Tool Usage Basics', qs: 15, pts: 2 },
+        { name: 'Prompt Basics', qs: 10, pts: 2 },
+        { name: 'AI Ethics & Literacy', qs: 10, pts: 2 },
       ],
     },
     L2: {
@@ -25,9 +26,9 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'AI Ethics & Security Practice', qs: 5, pts: 2 },
       ],
       practical: [
-        { part: ExamPart.PRACTICAL, title: 'Task 1: Draft a marketing email with an AI tool', durationMin: 15, points: 35, scenario: 'Use the in-platform AI chat to produce a 200-word marketing email for a new fitness app launch. Include subject line, body, and CTA.' },
-        { part: ExamPart.PRACTICAL, title: 'Task 2: Summarize a meeting transcript', durationMin: 15, points: 35, scenario: 'Given a 1,200-word meeting transcript, use AI to produce a 5-bullet summary plus a list of action items.' },
-        { part: ExamPart.PRACTICAL, title: 'Task 3: Build a simple data report', durationMin: 15, points: 30, scenario: 'Use AI to draft a one-page sales report from the provided CSV snippet. Include 1 chart description and 3 insights.' },
+        { part: ExamPart.PRACTICAL, title: 'Task A: Draft a business deliverable with AI', durationMin: 20, points: 25, scenario: 'Use the in-platform AI chat to produce a 200-word marketing email for a new fitness app launch. Include subject line, body, and CTA.' },
+        { part: ExamPart.PRACTICAL, title: 'Task B: Summarize & verify source material', durationMin: 20, points: 25, scenario: 'Given a 1,200-word meeting transcript, use AI to produce a 5-bullet summary plus a list of action items, and flag anything that needs verification.' },
+        { part: ExamPart.PRACTICAL, title: 'Task C: Improve a workflow with AI', durationMin: 20, points: 20, scenario: 'Use AI to draft a one-page sales report from the provided CSV snippet. Include 1 chart description and 3 insights.' },
       ],
     },
     L1: {
@@ -36,17 +37,19 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'AI Governance & Risk Management', qs: 10, pts: 4 },
       ],
       practical: [
-        { part: ExamPart.DELIVERABLE, title: 'Part A: AX initiative planning document', durationMin: 40, points: 60, scenario: 'You lead a 50-person product org. Draft a 1-page AX adoption plan: scope, KPIs, risks, 90-day milestones. Use the in-platform AI tool; the chat log will be reviewed.' },
-        { part: ExamPart.ESSAY, title: 'Part B: 3 leadership scenario essays', durationMin: 20, points: 40, scenario: 'Answer all three: (1) How would you handle an executive pushing to ship an AI feature without bias review? (2) Describe a governance structure for AI experimentation. (3) An AI vendor leak just exposed customer data — your first 24 hours?' },
+        { part: ExamPart.DELIVERABLE, title: 'Part B: Organizational AX execution plan', durationMin: 60, points: 55, scenario: 'You lead a 50-person product org. Using the fixed execution-plan template, draft an AX adoption plan: org diagnosis, candidate tasks, prioritization, 30/90/180-day roadmap, governance, data/tool policy, risk control, change management, KPIs, post-monitoring. Use the in-platform AI tool; the chat log will be reviewed.' },
+        { part: ExamPart.ESSAY, title: 'Part C-1: Risk & incident response essay', durationMin: 15, points: 10, scenario: 'An AI vendor leak just exposed customer data. Describe your first 24 hours: containment, scope assessment, reporting chain, recurrence prevention, and accountability.' },
+        { part: ExamPart.ESSAY, title: 'Part C-2: Change & performance management essay', durationMin: 15, points: 10, scenario: 'Staff resist a new AI workflow. Describe your change-management plan: stakeholder analysis, training, pilot/rollout, KPIs, and communication cadence.' },
       ],
     },
   },
   AXIS_C: {
     L3: {
       written: [
-        { name: 'AI Coding Concepts & Tools', qs: 20, pts: 2 },
-        { name: 'Prompt-to-Code & Automation Basics', qs: 20, pts: 2 },
-        { name: 'AI Coding Ethics & Safety', qs: 10, pts: 2 },
+        { name: 'AI Coding Fundamentals', qs: 15, pts: 2 },
+        { name: 'AI Coding Tool Usage Basics', qs: 15, pts: 2 },
+        { name: 'Prompt-to-Code Basics', qs: 10, pts: 2 },
+        { name: 'AI Coding Ethics & Licensing', qs: 10, pts: 2 },
       ],
     },
     L2: {
@@ -56,9 +59,9 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'Coding Governance & Security', qs: 5, pts: 2 },
       ],
       practical: [
-        { part: ExamPart.PRACTICAL, title: 'Task 1: Generate a Python script with AI', durationMin: 15, points: 35, scenario: 'Use AI to generate a Python script that reads a CSV of orders and outputs total revenue per customer.' },
-        { part: ExamPart.PRACTICAL, title: 'Task 2: Automate a workflow', durationMin: 15, points: 35, scenario: 'Design a no-code automation: trigger when a Slack message contains "INC-", create a Linear issue, and reply with the issue link.' },
-        { part: ExamPart.PRACTICAL, title: 'Task 3: Debug AI-generated code', durationMin: 15, points: 30, scenario: 'The AI produced a buggy quicksort implementation (provided). Identify the bug, prompt the AI to fix it, and verify with two test cases.' },
+        { part: ExamPart.PRACTICAL, title: 'Task A: Implement an automation script with AI', durationMin: 30, points: 30, scenario: 'Use AI to generate a Python script that reads a CSV of orders and outputs total revenue per customer. Do not output raw personal data columns.' },
+        { part: ExamPart.PRACTICAL, title: 'Task B: Debug & improve AI-generated code', durationMin: 30, points: 20, scenario: 'The AI produced a buggy quicksort implementation (provided). Identify the bug, prompt the AI to fix it, and explain the fix.' },
+        { part: ExamPart.PRACTICAL, title: 'Task C: Test, verify & document', durationMin: 30, points: 20, scenario: 'Write test cases for the corrected script, verify expected outputs, and produce a short execution guide.' },
       ],
     },
     L1: {
@@ -67,17 +70,19 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'AI Coding Governance & Security Management', qs: 10, pts: 4 },
       ],
       practical: [
-        { part: ExamPart.DELIVERABLE, title: 'Part A: AI coding adoption plan', durationMin: 40, points: 60, scenario: 'Draft a plan to roll out AI pair-programming across a 30-engineer team. Include tool choice, security guardrails, training, and success metrics.' },
-        { part: ExamPart.ESSAY, title: 'Part B: 3 governance scenario essays', durationMin: 20, points: 40, scenario: 'Answer all three: (1) An engineer commits AI-generated code containing a GPL snippet — your response? (2) Define a code-review policy for AI-authored PRs. (3) How do you measure productivity gains without optimising for line-count?' },
+        { part: ExamPart.DELIVERABLE, title: 'Part B: AI coding & automation operating-model design', durationMin: 60, points: 55, scenario: 'Using the fixed execution-plan template, design an operating model to roll out AI pair-programming across a 30-engineer team: citizen-developer permissions, code-review, test/deploy approval, API-key & secret management, license & security policy, roadmap, KPIs, and post-monitoring.' },
+        { part: ExamPart.ESSAY, title: 'Part C-1: Security & licensing incident essay', durationMin: 15, points: 10, scenario: 'An engineer commits AI-generated code containing a GPL snippet that shipped to production. Describe your response: containment, license remediation, recurrence prevention, and accountability.' },
+        { part: ExamPart.ESSAY, title: 'Part C-2: Code-quality governance essay', durationMin: 15, points: 10, scenario: 'Define a code-review and quality policy for AI-authored PRs, and explain how you measure productivity gains without optimising for line-count.' },
       ],
     },
   },
   AXIS_H: {
     L3: {
       written: [
-        { name: 'AI Concepts & Healthcare Digital Transformation', qs: 15, pts: 2 },
-        { name: 'Generative AI Working Principles', qs: 15, pts: 2 },
-        { name: 'Healthcare AI Tool Ecosystem & Application', qs: 20, pts: 2 },
+        { name: 'Healthcare AI Fundamentals', qs: 15, pts: 2 },
+        { name: 'Healthcare AI Tool Usage Basics', qs: 15, pts: 2 },
+        { name: 'Clinical Prompt Basics', qs: 10, pts: 2 },
+        { name: 'Healthcare AI Ethics & Privacy', qs: 10, pts: 2 },
       ],
     },
     L2: {
@@ -87,9 +92,9 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'Healthcare AI Ethics, Privacy & Security', qs: 5, pts: 2 },
       ],
       practical: [
-        { part: ExamPart.PRACTICAL, title: 'Task 1: Patient discharge summary draft', durationMin: 15, points: 35, scenario: 'Use AI to draft a patient discharge summary from the supplied (synthetic) clinical notes. Avoid PHI exposure in the prompt.' },
-        { part: ExamPart.PRACTICAL, title: 'Task 2: Hospital scheduling optimization', durationMin: 15, points: 35, scenario: 'Use AI to propose an OR scheduling rearrangement given the supplied 1-week schedule with 3 conflicts.' },
-        { part: ExamPart.PRACTICAL, title: 'Task 3: Patient FAQ chatbot prompt', durationMin: 15, points: 30, scenario: 'Design a system prompt for a patient-facing FAQ chatbot covering pre-op fasting rules. Include 3 safety guardrails.' },
+        { part: ExamPart.PRACTICAL, title: 'Task A: Draft a non-clinical patient notice', durationMin: 20, points: 25, scenario: 'Use AI to draft a patient appointment-reminder notice from the supplied (synthetic) administrative notes. Strip all patient-identifying information before prompting; avoid any diagnosis/treatment wording.' },
+        { part: ExamPart.PRACTICAL, title: 'Task B: Summarize & verify administrative material', durationMin: 20, points: 25, scenario: 'Use AI to summarize the supplied hospital administrative document, and flag any expression that could be mistaken for medical advice or false reassurance.' },
+        { part: ExamPart.PRACTICAL, title: 'Task C: Improve a non-clinical workflow', durationMin: 20, points: 20, scenario: 'Design a non-clinical FAQ workflow for pre-op fasting *administrative* guidance. Include 3 safety guardrails ensuring no clinical judgement is implied.' },
       ],
     },
     L1: {
@@ -98,8 +103,9 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'Healthcare AI Governance & Risk Management', qs: 10, pts: 4 },
       ],
       practical: [
-        { part: ExamPart.DELIVERABLE, title: 'Part A: Hospital AX roadmap', durationMin: 40, points: 60, scenario: 'Draft a 12-month AX roadmap for a 500-bed hospital. Include 3 use cases, PIPA compliance plan, vendor risk register, and ROI model.' },
-        { part: ExamPart.ESSAY, title: 'Part B: 3 healthcare AI governance essays', durationMin: 20, points: 40, scenario: 'Answer all three: (1) An AI triage tool flags a wrong diagnosis — accountability? (2) Design an IRB-style review for clinical AI pilots. (3) Patient consent for AI-assisted diagnosis: what does informed consent look like?' },
+        { part: ExamPart.DELIVERABLE, title: 'Part B: Hospital AI adoption & compliance plan', durationMin: 60, points: 55, scenario: 'Using the fixed execution-plan template, draft a non-clinical AI adoption & operating plan for a 500-bed hospital: non-clinical scope boundary, patient-information de-identification standard, medical-misinterpretation safeguards, departmental approval/review structure, PIPA compliance, roadmap, KPIs, and post-monitoring.' },
+        { part: ExamPart.ESSAY, title: 'Part C-1: Compliance & incident response essay', durationMin: 15, points: 10, scenario: 'A non-clinical AI notice was published containing language that could be read as a diagnosis. Describe your response: containment, patient communication, accountability, and recurrence prevention.' },
+        { part: ExamPart.ESSAY, title: 'Part C-2: Change management essay', durationMin: 15, points: 10, scenario: 'Departments resist a new non-clinical AI workflow over liability fears. Describe your change-management plan: stakeholder analysis, training, pilot/rollout, KPIs, and communication.' },
       ],
     },
   },

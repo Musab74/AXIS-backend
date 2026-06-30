@@ -11,8 +11,9 @@ export class NiceRequestDto {
   authType!: 'CHECKPLUS' | 'IPIN';
 
   @ApiProperty({
-    description: '인증 완료 후 리다이렉트 URL (프론트엔드)',
-    example: 'http://localhost:5173/auth/nice/callback',
+    description:
+      'Optional (ignored for RTN_URL). NICE return URL is fixed server-side: {APP_URL}/auth/nice/checkplus-return or ipin-return — register that URL in NICE admin.',
+    example: 'http://localhost:5173/',
     required: false,
   })
   @IsString()

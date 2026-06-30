@@ -1,36 +1,56 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { spawn } from 'child_process';
 import * as crypto from 'crypto';
+import * as iconv from 'iconv-lite';
 
 /**
- * NICE 본인인증 서비스
+ * NICE 본인인증 (CheckPlusSafe + I-PIN)
  *
- * 지원 방식:
- * 1. CheckPlus (휴대폰 인증 via PASS 앱)
- * 2. I-PIN (아이핀 인증)
+ * The wire format is NOT pure JS — NICE ships a native CPClient binary that
+ * handles encryption/decryption with their proprietary key schedule. We invoke
+ * the binary as a subprocess (exactly how the official PHP sample does it):
  *
- * Flow:
- * 1. Frontend calls /auth/nice/request → gets encrypted data + request number
- * 2. Frontend opens NICE popup with the encrypted data
- * 3. NICE redirects to our callback URL with result
- * 4. Backend decrypts and returns verified identity
+ *   CPClient_64bit ENC <sitecode> <sitepasswd> <plaindata>   → returns base64 enc
+ *   CPClient_64bit DEC <sitecode> <sitepasswd> <encdata>     → returns plaintext
+ *
+ * Both calls return a negative integer string (e.g. "-9") on error.
+ *
+ * Plaintext format: length-prefixed `<nameLen>:<name><valueLen>:<value>` repeated.
+ * Output (decryption) is EUC-KR encoded.
  */
 
 export interface NiceVerificationResult {
   success: boolean;
   requestNo: string;
-  name?: string;         // 실명
-  phone?: string;        // 휴대폰 번호
-  birthDate?: string;    // YYYYMMDD
-  gender?: string;       // 1=male, 0=female
-  nationalInfo?: string; // 0=내국인, 1=외국인
-  ci?: string;           // Connecting Info (개인 고유값)
-  di?: string;           // Duplicate Info (서비스별 고유값)
+  name?: string;
+  phone?: string;
+  birthDate?: string;
+  gender?: string;
+  nationalInfo?: string;
+  ci?: string;
+  di?: string;
   errorCode?: string;
   errorMessage?: string;
 }
 
 export type NiceAuthType = 'CHECKPLUS' | 'IPIN';
+
+const ENC_ERRORS: Record<string, string> = {
+  '-1': '암/복호화 시스템 오류',
+  '-2': '암호화 처리 오류',
+  '-3': '암호화 데이터 오류',
+  '-9': '입력값 오류',
+};
+
+const DEC_ERRORS: Record<string, string> = {
+  '-1': '암/복호화 시스템 오류',
+  '-4': '복호화 처리 오류',
+  '-5': 'HASH값 불일치',
+  '-6': '복호화 데이터 오류',
+  '-9': '입력값 오류',
+  '-12': '사이트 비밀번호 오류',
+};
 
 @Injectable()
 export class NiceAuthService {
@@ -38,117 +58,109 @@ export class NiceAuthService {
 
   constructor(private readonly config: ConfigService) {}
 
-  /**
-   * NICE 인증 요청 데이터 생성
-   * Frontend에서 NICE 팝업을 열기 위한 암호화된 데이터를 반환
-   */
-  generateRequest(authType: NiceAuthType, returnUrl: string): {
-    requestNo: string;
-    encData: string;
-    authType: NiceAuthType;
-    actionUrl: string;
-  } {
+  async generateRequest(
+    authType: NiceAuthType,
+    returnUrl: string,
+  ): Promise<{ requestNo: string; encData: string; authType: NiceAuthType; actionUrl: string }> {
     const requestNo = this.generateRequestNo();
-
     if (authType === 'CHECKPLUS') {
       return this.generateCheckPlusRequest(requestNo, returnUrl);
-    } else {
-      return this.generateIpinRequest(requestNo, returnUrl);
     }
+    return this.generateIpinRequest(requestNo, returnUrl);
   }
 
-  /**
-   * CheckPlus (PASS 휴대폰 인증) 요청 생성
-   */
-  private generateCheckPlusRequest(requestNo: string, returnUrl: string) {
-    const sitecode = this.config.get<string>('nice.checkplus.sitecode');
-    const sitepasswd = this.config.get<string>('nice.checkplus.sitepasswd');
+  private async generateCheckPlusRequest(requestNo: string, returnUrl: string) {
+    const sitecode = this.requireConfig('nice.checkplus.sitecode');
+    const sitepasswd = this.requireConfig('nice.checkplus.sitepasswd');
+    const binary = this.requireConfig('nice.checkplus.modulePath');
 
-    // NICE CheckPlus 요청 데이터 구성
-    const plainData = [
-      `7:REQ_SEQ${requestNo.length}:${requestNo}`,
-      `8:SITECODE${sitecode!.length}:${sitecode}`,
-      `9:AUTH_TYPE`,  // 빈값 = 모든 인증수단 허용
-      `9:RTN_URL${returnUrl.length}:${returnUrl}`,
-      `7:ERR_URL${returnUrl.length}:${returnUrl}`,
-    ].join('');
+    // Length-prefixed plaintext, exactly matching NICE's PHP reference.
+    // AUTH_TYPE M = mobile only; "" = let user pick. POPUP_GUBUN N = no cancel button.
+    const authTypeVal = 'M';
+    const popGubun = 'N';
+    const customize = '';
+    const gender = '';
+    const plainData =
+      `7:REQ_SEQ${requestNo.length}:${requestNo}` +
+      `8:SITECODE${sitecode.length}:${sitecode}` +
+      `9:AUTH_TYPE${authTypeVal.length}:${authTypeVal}` +
+      `7:RTN_URL${returnUrl.length}:${returnUrl}` +
+      `7:ERR_URL${returnUrl.length}:${returnUrl}` +
+      `11:POPUP_GUBUN${popGubun.length}:${popGubun}` +
+      `9:CUSTOMIZE${customize.length}:${customize}` +
+      `6:GENDER${gender.length}:${gender}`;
 
-    const encData = this.encrypt(plainData, sitecode!, sitepasswd!);
+    const encData = await this.runCpClient(binary, ['ENC', sitecode, sitepasswd, plainData], ENC_ERRORS);
 
     return {
       requestNo,
       encData,
       authType: 'CHECKPLUS' as NiceAuthType,
-      actionUrl: 'https://nice.checkplus.co.kr/CheckPlusSafe498/checkplus.cb',
+      actionUrl: 'https://nice.checkplus.co.kr/CheckPlusSafeModel/checkplus.cb',
     };
   }
 
-  /**
-   * I-PIN 인증 요청 생성
-   */
-  private generateIpinRequest(requestNo: string, returnUrl: string) {
-    const sitecode = this.config.get<string>('nice.ipin.sitecode');
-    const sitepasswd = this.config.get<string>('nice.ipin.sitepasswd');
+  private async generateIpinRequest(requestNo: string, returnUrl: string) {
+    const sitecode = this.requireConfig('nice.ipin.sitecode');
+    const sitepasswd = this.requireConfig('nice.ipin.sitepasswd');
+    const binary = this.requireConfig('nice.ipin.modulePath');
 
-    const plainData = [
-      `7:REQ_SEQ${requestNo.length}:${requestNo}`,
-      `8:SITECODE${sitecode!.length}:${sitecode}`,
-      `9:RTN_URL${returnUrl.length}:${returnUrl}`,
-    ].join('');
-
-    const encData = this.encrypt(plainData, sitecode!, sitepasswd!);
+    // I-PIN module uses a different argv shape: REQ <sitecode> <sitepasswd> <reqno> <returnUrl>.
+    const stdout = await this.execAndCapture(binary, ['REQ', sitecode, sitepasswd, requestNo, returnUrl]);
+    const code = parseInt(stdout, 10);
+    if (!isNaN(code) && code < 0) {
+      throw new InternalServerErrorException(`NICE I-PIN 요청 실패: ${ENC_ERRORS[String(code)] ?? `code ${code}`}`);
+    }
 
     return {
       requestNo,
-      encData,
+      encData: stdout,
       authType: 'IPIN' as NiceAuthType,
       actionUrl: 'https://cert.vno.co.kr/ipin.cb',
     };
   }
 
-  /**
-   * NICE 콜백에서 받은 암호화 데이터 복호화
-   */
-  decryptResponse(encData: string, authType: NiceAuthType): NiceVerificationResult {
+  async decryptResponse(encData: string, authType: NiceAuthType): Promise<NiceVerificationResult> {
     try {
-      let sitecode: string;
-      let sitepasswd: string;
+      const sitecode = this.requireConfig(
+        authType === 'CHECKPLUS' ? 'nice.checkplus.sitecode' : 'nice.ipin.sitecode',
+      );
+      const sitepasswd = this.requireConfig(
+        authType === 'CHECKPLUS' ? 'nice.checkplus.sitepasswd' : 'nice.ipin.sitepasswd',
+      );
+      const binary = this.requireConfig(
+        authType === 'CHECKPLUS' ? 'nice.checkplus.modulePath' : 'nice.ipin.modulePath',
+      );
 
-      if (authType === 'CHECKPLUS') {
-        sitecode = this.config.get<string>('nice.checkplus.sitecode')!;
-        sitepasswd = this.config.get<string>('nice.checkplus.sitepasswd')!;
-      } else {
-        sitecode = this.config.get<string>('nice.ipin.sitecode')!;
-        sitepasswd = this.config.get<string>('nice.ipin.sitepasswd')!;
-      }
+      const decrypted = await this.runCpClient(binary, ['DEC', sitecode, sitepasswd, encData], DEC_ERRORS);
+      const fields = this.parseLengthColonPlain(decrypted);
+      const parsed = this.fieldsToResult(fields, authType);
 
-      const decrypted = this.decrypt(encData, sitecode, sitepasswd);
-      const parsed = this.parseResponse(decrypted, authType);
-
-      this.logger.log(`NICE verification success: requestNo=${parsed.requestNo}`);
+      // Field names only — values are PIPA-protected and must not appear in logs.
+      this.logger.log(
+        `NICE verification success: requestNo=${parsed.requestNo} returnedFields=${Object.keys(fields).join(',')}`,
+      );
       return parsed;
-    } catch (error) {
-      this.logger.error('NICE decryption failed', error);
+    } catch (error: any) {
+      this.logger.error('NICE decryption failed', error?.stack ?? error);
       return {
         success: false,
         requestNo: '',
         errorCode: 'DECRYPT_FAILED',
-        errorMessage: 'Failed to decrypt NICE response',
+        errorMessage: error?.message || 'Failed to decrypt NICE response',
       };
     }
   }
 
-  /**
-   * 복호화된 데이터 파싱
-   */
-  private parseResponse(decryptedData: string, authType: NiceAuthType): NiceVerificationResult {
-    const data = this.parseKeyValue(decryptedData);
-
+  private fieldsToResult(data: Record<string, string>, authType: NiceAuthType): NiceVerificationResult {
+    // Use NAME (EUC-KR), not UTF8_NAME. We EUC-KR-decode the whole stdout buffer once;
+    // NAME comes through cleanly as UTF-8, but UTF8_NAME's already-UTF8 bytes get
+    // double-decoded into mojibake by that pass.
     if (authType === 'CHECKPLUS') {
       return {
         success: true,
         requestNo: data['REQ_SEQ'] || '',
-        name: data['UTF8_NAME'] || data['NAME'] || '',
+        name: data['NAME'] || '',
         phone: data['MOBILE_NO'] || '',
         birthDate: data['BIRTHDATE'] || '',
         gender: data['GENDER'] || '',
@@ -156,83 +168,96 @@ export class NiceAuthService {
         ci: data['CI'] || '',
         di: data['DI'] || '',
       };
-    } else {
-      // I-PIN
-      return {
-        success: true,
-        requestNo: data['REQ_SEQ'] || '',
-        name: data['NAME'] || '',
-        birthDate: data['BIRTHDATE'] || '',
-        gender: data['GENDER'] || '',
-        nationalInfo: data['NATIONALINFO'] || '',
-        ci: data['CI'] || '',
-        di: data['DI'] || '',
-      };
     }
+    return {
+      success: true,
+      requestNo: data['REQ_SEQ'] || '',
+      name: data['NAME'] || '',
+      birthDate: data['BIRTHDATE'] || '',
+      gender: data['GENDER'] || '',
+      nationalInfo: data['NATIONALINFO'] || '',
+      ci: data['CI'] || '',
+      di: data['DI'] || '',
+    };
   }
 
-  /**
-   * NICE 응답 key=value 파싱
-   */
-  private parseKeyValue(data: string): Record<string, string> {
-    const result: Record<string, string> = {};
-    const pairs = data.split('&');
-    for (const pair of pairs) {
-      const idx = pair.indexOf('=');
-      if (idx > 0) {
-        const key = pair.substring(0, idx);
-        const value = decodeURIComponent(pair.substring(idx + 1));
-        result[key] = value;
-      }
+  private parseLengthColonPlain(plain: string): Record<string, string> {
+    const r: Record<string, string> = {};
+    let pos = 0;
+    while (pos < plain.length) {
+      const c1 = plain.indexOf(':', pos);
+      if (c1 < 0) break;
+      const nameLen = parseInt(plain.slice(pos, c1), 10);
+      if (Number.isNaN(nameLen) || nameLen <= 0) break;
+      pos = c1 + 1;
+      if (pos + nameLen > plain.length) break;
+      const fieldName = plain.slice(pos, pos + nameLen);
+      pos += nameLen;
+      const c2 = plain.indexOf(':', pos);
+      if (c2 < 0) break;
+      const valueLen = parseInt(plain.slice(pos, c2), 10);
+      if (Number.isNaN(valueLen) || valueLen < 0) break;
+      pos = c2 + 1;
+      if (pos + valueLen > plain.length) break;
+      r[fieldName] = plain.slice(pos, pos + valueLen);
+      pos += valueLen;
     }
-    return result;
+    return r;
   }
 
-  /**
-   * 암호화 (NICE 규격)
-   * NICE uses SEED/AES encryption with sitecode-derived key
-   */
-  private encrypt(plainText: string, sitecode: string, sitepasswd: string): string {
-    const key = this.deriveKey(sitecode, sitepasswd);
-    const iv = key.subarray(0, 16);
-    const cipher = crypto.createCipheriv('aes-128-cbc', key.subarray(0, 16), iv);
-    let encrypted = cipher.update(plainText, 'utf8', 'base64');
-    encrypted += cipher.final('base64');
-    return encrypted;
+  private async runCpClient(
+    binary: string,
+    args: string[],
+    errorTable: Record<string, string>,
+  ): Promise<string> {
+    const stdout = await this.execAndCapture(binary, args);
+    const code = parseInt(stdout, 10);
+    if (!isNaN(code) && code < 0 && errorTable[String(code)]) {
+      throw new InternalServerErrorException(`NICE: ${errorTable[String(code)]} (code ${code})`);
+    }
+    return stdout;
   }
 
-  /**
-   * 복호화 (NICE 규격)
-   */
-  private decrypt(encData: string, sitecode: string, sitepasswd: string): string {
-    const key = this.deriveKey(sitecode, sitepasswd);
-    const iv = key.subarray(0, 16);
-    const decipher = crypto.createDecipheriv('aes-128-cbc', key.subarray(0, 16), iv);
-    let decrypted = decipher.update(encData, 'base64', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+  // CPClient exits with code 1 even on successful encryption — exit status is unreliable.
+  // We always resolve from stdout content; if it's empty, that's the real failure signal.
+  private execAndCapture(binary: string, args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(binary, args, { timeout: 10_000 });
+      const out: Buffer[] = [];
+      const err: Buffer[] = [];
+      proc.stdout.on('data', (c: Buffer) => out.push(c));
+      proc.stderr.on('data', (c: Buffer) => err.push(c));
+      proc.on('error', reject);
+      proc.on('close', () => {
+        const stdout = Buffer.concat(out);
+        if (stdout.length === 0) {
+          const stderr = Buffer.concat(err).toString();
+          reject(new Error(`NICE binary returned empty stdout${stderr ? ` (stderr: ${stderr})` : ''}`));
+          return;
+        }
+        resolve(iconv.decode(stdout, 'euc-kr').trim());
+      });
+    });
   }
 
-  /**
-   * sitecode + sitepasswd 로 암호화 키 도출
-   */
-  private deriveKey(sitecode: string, sitepasswd: string): Buffer {
-    const combined = sitecode + sitepasswd;
-    return crypto.createHash('sha256').update(combined).digest();
+  private requireConfig(key: string): string {
+    const value = this.config.get<string>(key);
+    if (!value) {
+      throw new InternalServerErrorException(`Missing NICE config: ${key}`);
+    }
+    return value;
   }
 
-  /**
-   * 고유 요청 번호 생성 (NICE 규격: 30자리)
-   */
   private generateRequestNo(): string {
     const now = new Date();
-    const timestamp = now.getFullYear().toString()
-      + (now.getMonth() + 1).toString().padStart(2, '0')
-      + now.getDate().toString().padStart(2, '0')
-      + now.getHours().toString().padStart(2, '0')
-      + now.getMinutes().toString().padStart(2, '0')
-      + now.getSeconds().toString().padStart(2, '0');
+    const ts =
+      now.getFullYear().toString() +
+      (now.getMonth() + 1).toString().padStart(2, '0') +
+      now.getDate().toString().padStart(2, '0') +
+      now.getHours().toString().padStart(2, '0') +
+      now.getMinutes().toString().padStart(2, '0') +
+      now.getSeconds().toString().padStart(2, '0');
     const random = crypto.randomBytes(8).toString('hex').substring(0, 16);
-    return timestamp + random; // 14 + 16 = 30 chars
+    return ts + random;
   }
 }

@@ -1,0 +1,22 @@
+﻿column_name,required,example,description
+no,필수,1,문항 번호
+cert_type,필수,AXIS / AXIS-C / AXIS-H,자격 구분
+level,필수,L3 / L2 / L1,등급 구분
+subject,필수,AI 기본 이해,검정과목명
+domain_area,필수권장,생성형 AI 개념,세부 출제영역
+q_type,필수,multiple_choice / scenario,문항 대분류
+item_purpose,필수권장,concept / tool_use / case_judgment / ethics_security / output_review / code_reading / debugging / healthcare_context / governance / prompt_basic,문항 목적
+difficulty,필수권장,easy / medium / hard,난이도
+content,필수,다음 중 생성형 AI의 특징으로 가장 적절한 것은?,문항 본문
+option_a,필수,보기 A,선택지 A
+option_b,필수,보기 B,선택지 B
+option_c,필수,보기 C,선택지 C
+option_d,필수,보기 D,선택지 D
+correct_answer,필수,A / B / C / D,정답키
+points,필수,2,문항 배점
+explanation,필수,정답은 B입니다. ...,정답해설. 정답 선택의 근거와 핵심 판단 기준을 설명
+source_ref,권장,AXIS L3 과목1 세부영역1,출제근거
+shuffle_exempt,권장,TRUE / FALSE,선택지 셔플 제외 여부
+review_status,필수권장,draft / reviewed / approved / rejected,검수상태
+review_comment,권장,정답해설 보완 필요,검수 의견
+version,필수,1,문항 버전
