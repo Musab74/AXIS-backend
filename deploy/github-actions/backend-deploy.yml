@@ -6,29 +6,21 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, axis-backend]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
-      - run: npm ci
-      - run: npm run build
-      - run: npm test -- --passWithNoTests || true
-
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            cd ${{ secrets.DEPLOY_PATH }}/AXIS-backend
-            git pull origin main
-            npm ci
-            npx prisma generate
-            npm run build
-            pm2 restart axis-backend --update-env
+      - name: Install, build, and restart
+        run: |
+          cd /web/axis/AXIS-backend
+          git fetch origin main
+          git reset --hard origin/main
+          npm ci
+          npx prisma generate
+          npm run build
+          npm test -- --passWithNoTests || true
+          pm2 restart axis-backend --update-env
