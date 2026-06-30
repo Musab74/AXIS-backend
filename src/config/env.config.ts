@@ -1,3 +1,8 @@
+import { join } from 'path';
+
+const bundledNiceBinary = (relativePath: string) =>
+  join(process.cwd(), 'lib/nice', relativePath);
+
 export const envConfig = () => ({
   port: parseInt(process.env.APP_PORT || '3000', 10),
   appUrl: process.env.APP_URL || 'http://localhost:3000',
@@ -14,12 +19,16 @@ export const envConfig = () => ({
     checkplus: {
       sitecode: process.env.NICE_CHECKPLUS_SITECODE || '',
       sitepasswd: process.env.NICE_CHECKPLUS_SITEPASSWD || '',
-      modulePath: process.env.NICE_CHECKPLUS_MODULE_PATH || '',
+      modulePath:
+        process.env.NICE_CHECKPLUS_MODULE_PATH ||
+        bundledNiceBinary('CheckPlusSafe/64bit/CPClient_64bit'),
     },
     ipin: {
       sitecode: process.env.NICE_IPIN_SITECODE || '',
       sitepasswd: process.env.NICE_IPIN_SITEPASSWD || '',
-      modulePath: process.env.NICE_IPIN_MODULE_PATH || '',
+      modulePath:
+        process.env.NICE_IPIN_MODULE_PATH ||
+        bundledNiceBinary('NiceIPIN/64bit/IPIN2Client'),
     },
   },
 
