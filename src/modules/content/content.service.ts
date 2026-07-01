@@ -70,7 +70,9 @@ export class ContentService {
     if (filters.search) {
       where.OR = [
         { title: { contains: filters.search } },
+        { titleEn: { contains: filters.search } },
         { content: { contains: filters.search } },
+        { contentEn: { contains: filters.search } },
       ];
     }
 
@@ -100,9 +102,12 @@ export class ContentService {
     return this.prisma.notice.create({
       data: {
         tag: dto.tag,
+        tagEn: dto.tagEn ?? null,
         tagType: dto.tagType ?? 'NORMAL',
         title: dto.title,
+        titleEn: dto.titleEn ?? null,
         content: dto.content,
+        contentEn: dto.contentEn ?? null,
         status: dto.status ?? 'DRAFT',
         pinned: dto.pinned ?? false,
       },

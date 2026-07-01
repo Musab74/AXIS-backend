@@ -6,6 +6,10 @@ export class UpdateNoticeDto {
   @IsOptional()
   tag?: string;
 
+  @IsString()
+  @IsOptional()
+  tagEn?: string;
+
   @IsEnum(NoticeTagType)
   @IsOptional()
   tagType?: NoticeTagType;
@@ -16,7 +20,15 @@ export class UpdateNoticeDto {
 
   @IsString()
   @IsOptional()
+  titleEn?: string;
+
+  @IsString()
+  @IsOptional()
   content?: string;
+
+  @IsString()
+  @IsOptional()
+  contentEn?: string;
 
   @IsEnum(NoticeStatus)
   @IsOptional()

@@ -5,6 +5,10 @@ export class CreateNoticeDto {
   @IsString()
   tag: string;
 
+  @IsString()
+  @IsOptional()
+  tagEn?: string;
+
   @IsEnum(NoticeTagType)
   @IsOptional()
   tagType?: NoticeTagType;
@@ -13,7 +17,15 @@ export class CreateNoticeDto {
   title: string;
 
   @IsString()
+  @IsOptional()
+  titleEn?: string;
+
+  @IsString()
   content: string;
+
+  @IsString()
+  @IsOptional()
+  contentEn?: string;
 
   @IsEnum(NoticeStatus)
   @IsOptional()

@@ -793,9 +793,12 @@ enum NoticeStatus {
 model Notice {
   id        String        @id @default(cuid())
   tag       String
+  tagEn     String?       @map("tag_en")
   tagType   NoticeTagType @default(NORMAL) @map("tag_type")
   title     String
+  titleEn   String?       @map("title_en")
   content   String        @db.Text
+  contentEn String?       @map("content_en") @db.Text
   status    NoticeStatus  @default(DRAFT)
   pinned    Boolean       @default(false)
   views     Int           @default(0)
