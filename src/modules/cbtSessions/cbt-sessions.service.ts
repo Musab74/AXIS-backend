@@ -16,6 +16,7 @@ import { AdminNotificationsService } from '../adminNotifications/admin-notificat
 import { RedisService } from '../../integrations/redis/redis.service';
 import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-object-storage.service';
 import { assertIdentityVerifiedForSession } from './exam-identity-guard';
+import { assertRegistrationActiveForSession } from './registration-active-guard';
 
 const ENTRY_WINDOW_BEFORE_MS = 30 * 60_000; // opens 30 min before exam start
 const ENTRY_WINDOW_AFTER_MS = 10 * 60_000;  // closes 10 min after exam start
@@ -356,6 +357,7 @@ export class CbtSessionsService {
       if (s.status === ExamSessionStatus.IN_PROGRESS) return s;
       throw new BadRequestException(`Cannot start a session in status ${s.status}`);
     }
+    await assertRegistrationActiveForSession(this.prisma, s.registrationId);
     if (!(await this.hasRequiredConsents(userId, sessionId))) {
       throw new BadRequestException(
         'AI 감독 동의가 필요합니다. 시험을 시작하기 전에 동의해주세요.',

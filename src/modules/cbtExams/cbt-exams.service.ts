@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { ExamSessionPauseService } from '../adminMonitor/exam-session-pause.service';
 import { MonitorHeartbeatService } from '../adminMonitor/monitor-heartbeat.service';
 import { assertIdentityVerifiedForSession } from '../cbtSessions/exam-identity-guard';
+import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
 import { getTiming } from '../cbtSessions/exam-spec';
 
 @Injectable()
@@ -27,6 +28,8 @@ export class CbtExamsService {
     if (!session) throw new NotFoundException('Session not found');
     if (session.userId !== userId) throw new ForbiddenException();
     if (session.status === ExamSessionStatus.CREATED) throw new BadRequestException('Session not started');
+
+    await assertRegistrationActiveForSession(this.prisma, session.registrationId);
 
     await assertIdentityVerifiedForSession(
       this.prisma,
@@ -116,6 +119,7 @@ export class CbtExamsService {
       if (session.userId !== userId) throw new ForbiddenException();
       if (session.status !== ExamSessionStatus.IN_PROGRESS) throw new BadRequestException('Exam not in progress');
       if (session.hardDeadline && new Date() > session.hardDeadline) throw new BadRequestException('Time over');
+      await assertRegistrationActiveForSession(this.prisma, session.registrationId);
 
       const answer = await tx.answer.findUnique({
         where: { sessionId_questionId: { sessionId, questionId: body.questionId } },

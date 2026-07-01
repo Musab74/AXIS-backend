@@ -7,6 +7,7 @@ import { AdminNotificationsService } from '../adminNotifications/admin-notificat
 import { ExamSessionPauseService } from '../adminMonitor/exam-session-pause.service';
 import { CertificatesService } from '../certificates/certificates.service';
 import { CbtSessionsService } from '../cbtSessions/cbt-sessions.service';
+import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
 import { EssayGradingService } from './essay-grading.service';
 
 @Injectable()
@@ -35,6 +36,7 @@ export class GradingService {
       return this.getResult(userId, sessionId);
     }
     if (session.status !== ExamSessionStatus.IN_PROGRESS) throw new BadRequestException('Exam not in progress');
+    await assertRegistrationActiveForSession(this.prisma, session.registrationId);
 
     // Reject submit if the hard deadline has already passed — the client
     // auto-submits when time is up; a late server call means the candidate

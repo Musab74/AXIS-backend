@@ -5,6 +5,7 @@ import { ClaudeExamAssistantService } from '../../integrations/anthropic/claude-
 import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-object-storage.service';
 import { ConfigService } from '@nestjs/config';
 import { ExamSessionPauseService } from '../adminMonitor/exam-session-pause.service';
+import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
 import { evaluatePromptScope, SiblingTaskSnapshot } from './prompt-scope-guard';
 
 /**
@@ -57,6 +58,7 @@ export class CbtPracticalService {
     if (session.userId !== userId) throw new ForbiddenException();
     if (session.status !== ExamSessionStatus.IN_PROGRESS) throw new BadRequestException('Exam not in progress');
     if (session.hardDeadline && new Date() > session.hardDeadline) throw new BadRequestException('Time over');
+    await assertRegistrationActiveForSession(this.prisma, session.registrationId);
 
     const prompt = (body.prompt ?? '').trim();
     if (!prompt) throw new BadRequestException('Prompt is required');
@@ -142,6 +144,7 @@ export class CbtPracticalService {
       if (session.userId !== userId) throw new ForbiddenException();
       if (session.status !== ExamSessionStatus.IN_PROGRESS) throw new BadRequestException('Exam not in progress');
       if (session.hardDeadline && new Date() > session.hardDeadline) throw new BadRequestException('Time over');
+      await assertRegistrationActiveForSession(this.prisma, session.registrationId);
 
       const task = await tx.taskTemplate.findUnique({ where: { id: body.taskId } });
       if (!task) throw new NotFoundException('Task not found');
@@ -200,6 +203,7 @@ export class CbtPracticalService {
     if (session.userId !== userId) throw new ForbiddenException();
     if (session.status !== ExamSessionStatus.IN_PROGRESS) throw new BadRequestException('Exam not in progress');
     if (session.hardDeadline && new Date() > session.hardDeadline) throw new BadRequestException('Time over');
+    await assertRegistrationActiveForSession(this.prisma, session.registrationId);
 
     const task = await this.prisma.taskTemplate.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Task not found');

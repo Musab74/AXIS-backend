@@ -68,6 +68,14 @@ export class PortoneV1Gateway implements PortoneGateway {
       this.config.get<string>('portone.v1ImpSecret')?.trim() ||
       this.config.get<string>('portone.v1ApiSecret')?.trim() ||
       '';
+    if (!impSecret) {
+      // Fail closed — a webhook cannot be trusted if we have no secret to
+      // verify it with. Refusing here surfaces the misconfiguration in the
+      // PortOne dashboard's retry logs instead of silently accepting spoofed
+      // callbacks.
+      this.logger.error('PortOne V1 webhook: no imp secret configured — rejecting');
+      throw new BadRequestException('PortOne V1 webhook secret is not configured');
+    }
     let payload: {
       imp_uid?: string;
       merchant_uid?: string;
@@ -85,15 +93,19 @@ export class PortoneV1Gateway implements PortoneGateway {
     const status = payload.status;
     if (!impUid || !status) return [];
 
-    const signature = headers['imp_signature'] ?? headers['Imp-Signature'];
+    const signature =
+      headers['imp_signature'] ??
+      headers['imp-signature'] ??
+      headers['Imp-Signature'];
     const sig = Array.isArray(signature) ? signature[0] : signature;
-    if (impSecret && sig) {
-      const expected = createHmac('sha256', impSecret)
-        .update(`${impUid}${status}`)
-        .digest('hex');
-      if (expected !== sig) {
-        throw new BadRequestException('Invalid PortOne V1 webhook signature');
-      }
+    if (!sig) {
+      throw new BadRequestException('Missing PortOne V1 webhook signature');
+    }
+    const expected = createHmac('sha256', impSecret)
+      .update(`${impUid}${status}`)
+      .digest('hex');
+    if (expected !== sig) {
+      throw new BadRequestException('Invalid PortOne V1 webhook signature');
     }
 
     if (status === 'paid') {

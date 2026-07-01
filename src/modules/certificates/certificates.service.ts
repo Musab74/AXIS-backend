@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { CertType, ExamSessionStatus, Prisma } from '@prisma/client';
+import { CertType, ExamSessionStatus, Prisma, RegistrationStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
 
@@ -218,6 +218,16 @@ export class CertificatesService {
           },
         })
       : null;
+    // A refunded/cancelled registration cannot yield a certificate — even if
+    // a session under it somehow reached GRADED+passed (defense in depth
+    // alongside the cancelWithRefund/adminRefund IN_PROGRESS gates).
+    if (
+      registration &&
+      (registration.status === RegistrationStatus.REFUNDED ||
+        registration.status === RegistrationStatus.CANCELLED)
+    ) {
+      return null;
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.$queryRawUnsafe<CertificateRow[]>(

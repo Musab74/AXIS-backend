@@ -821,6 +821,34 @@ export class RegistrationsService {
       throw new BadRequestException('Cannot cancel a completed exam registration');
     }
 
+    // Same session gate as adminRefund — once the candidate has started the
+    // exam (IN_PROGRESS / SUBMITTED / GRADED / TERMINATED) the seat has been
+    // consumed and refunding would leave them free to keep taking the exam
+    // and potentially earn a certificate. Cover both the modern
+    // registrationId link and the legacy (userId, certType, level) join.
+    const blockingSession = await this.prisma.examSession.findFirst({
+      where: {
+        OR: [
+          { registrationId: reg.id },
+          { userId: reg.userId, certType: reg.certType, level: reg.level },
+        ],
+        status: {
+          in: [
+            ExamSessionStatus.IN_PROGRESS,
+            ExamSessionStatus.SUBMITTED,
+            ExamSessionStatus.GRADED,
+            ExamSessionStatus.TERMINATED,
+          ],
+        },
+      },
+      select: { id: true, status: true },
+    });
+    if (blockingSession) {
+      throw new ConflictException(
+        `시험이 이미 ${blockingSession.status} 상태입니다. 응시한 시험은 환불할 수 없습니다.`,
+      );
+    }
+
     const confirmedPayment = reg.payments.find((p) => p.status === 'CONFIRMED');
 
     if (!confirmedPayment) {
