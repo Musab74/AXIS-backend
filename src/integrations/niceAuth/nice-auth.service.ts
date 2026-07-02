@@ -106,7 +106,9 @@ export class NiceAuthService {
     const binary = this.requireConfig('nice.ipin.modulePath');
 
     // I-PIN module uses a different argv shape: REQ <sitecode> <sitepasswd> <reqno> <returnUrl>.
-    const stdout = await this.execAndCapture(binary, ['REQ', sitecode, sitepasswd, requestNo, returnUrl]);
+    const stdout = iconv
+      .decode(await this.execAndCapture(binary, ['REQ', sitecode, sitepasswd, requestNo, returnUrl]), 'euc-kr')
+      .trim();
     const code = parseInt(stdout, 10);
     if (!isNaN(code) && code < 0) {
       throw new InternalServerErrorException(`NICE I-PIN 요청 실패: ${ENC_ERRORS[String(code)] ?? `code ${code}`}`);
@@ -132,7 +134,7 @@ export class NiceAuthService {
         authType === 'CHECKPLUS' ? 'nice.checkplus.modulePath' : 'nice.ipin.modulePath',
       );
 
-      const decrypted = await this.runCpClient(binary, ['DEC', sitecode, sitepasswd, encData], DEC_ERRORS);
+      const decrypted = await this.runCpClientRaw(binary, ['DEC', sitecode, sitepasswd, encData], DEC_ERRORS);
       const fields = this.parseLengthColonPlain(decrypted);
       const parsed = this.fieldsToResult(fields, authType);
 
@@ -153,9 +155,8 @@ export class NiceAuthService {
   }
 
   private fieldsToResult(data: Record<string, string>, authType: NiceAuthType): NiceVerificationResult {
-    // Use NAME (EUC-KR), not UTF8_NAME. We EUC-KR-decode the whole stdout buffer once;
-    // NAME comes through cleanly as UTF-8, but UTF8_NAME's already-UTF8 bytes get
-    // double-decoded into mojibake by that pass.
+    // Use NAME (EUC-KR), not UTF8_NAME: values are decoded per-field as EUC-KR,
+    // so UTF8_NAME's already-UTF8 bytes would come out as mojibake.
     if (authType === 'CHECKPLUS') {
       return {
         success: true,
@@ -181,25 +182,29 @@ export class NiceAuthService {
     };
   }
 
-  private parseLengthColonPlain(plain: string): Record<string, string> {
+  // NICE length prefixes count BYTES of the EUC-KR payload, so parsing must happen
+  // on the raw buffer: a Korean char is 2 bytes in EUC-KR but 1 JS char, and
+  // string-based slicing shifts every field after NAME (corrupting CI/DI/MOBILE_NO).
+  private parseLengthColonPlain(plain: Buffer): Record<string, string> {
     const r: Record<string, string> = {};
+    const COLON = 0x3a;
     let pos = 0;
     while (pos < plain.length) {
-      const c1 = plain.indexOf(':', pos);
+      const c1 = plain.indexOf(COLON, pos);
       if (c1 < 0) break;
-      const nameLen = parseInt(plain.slice(pos, c1), 10);
+      const nameLen = parseInt(plain.subarray(pos, c1).toString('latin1'), 10);
       if (Number.isNaN(nameLen) || nameLen <= 0) break;
       pos = c1 + 1;
       if (pos + nameLen > plain.length) break;
-      const fieldName = plain.slice(pos, pos + nameLen);
+      const fieldName = plain.subarray(pos, pos + nameLen).toString('latin1');
       pos += nameLen;
-      const c2 = plain.indexOf(':', pos);
+      const c2 = plain.indexOf(COLON, pos);
       if (c2 < 0) break;
-      const valueLen = parseInt(plain.slice(pos, c2), 10);
+      const valueLen = parseInt(plain.subarray(pos, c2).toString('latin1'), 10);
       if (Number.isNaN(valueLen) || valueLen < 0) break;
       pos = c2 + 1;
       if (pos + valueLen > plain.length) break;
-      r[fieldName] = plain.slice(pos, pos + valueLen);
+      r[fieldName] = iconv.decode(plain.subarray(pos, pos + valueLen), 'euc-kr');
       pos += valueLen;
     }
     return r;
@@ -210,8 +215,17 @@ export class NiceAuthService {
     args: string[],
     errorTable: Record<string, string>,
   ): Promise<string> {
+    const stdout = await this.runCpClientRaw(binary, args, errorTable);
+    return iconv.decode(stdout, 'euc-kr').trim();
+  }
+
+  private async runCpClientRaw(
+    binary: string,
+    args: string[],
+    errorTable: Record<string, string>,
+  ): Promise<Buffer> {
     const stdout = await this.execAndCapture(binary, args);
-    const code = parseInt(stdout, 10);
+    const code = parseInt(stdout.toString('latin1').trim(), 10);
     if (!isNaN(code) && code < 0 && errorTable[String(code)]) {
       throw new InternalServerErrorException(`NICE: ${errorTable[String(code)]} (code ${code})`);
     }
@@ -220,7 +234,7 @@ export class NiceAuthService {
 
   // CPClient exits with code 1 even on successful encryption — exit status is unreliable.
   // We always resolve from stdout content; if it's empty, that's the real failure signal.
-  private execAndCapture(binary: string, args: string[]): Promise<string> {
+  private execAndCapture(binary: string, args: string[]): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const proc = spawn(binary, args, { timeout: 10_000 });
       const out: Buffer[] = [];
@@ -235,7 +249,7 @@ export class NiceAuthService {
           reject(new Error(`NICE binary returned empty stdout${stderr ? ` (stderr: ${stderr})` : ''}`));
           return;
         }
-        resolve(iconv.decode(stdout, 'euc-kr').trim());
+        resolve(stdout);
       });
     });
   }
