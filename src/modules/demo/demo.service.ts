@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
 
 const DEMO_QUESTION_COUNT = 5;
-const DEMO_DURATION_MIN = 10;
+const DEMO_DURATION_MIN = 15;
 const DEMO_CERT_VALIDITY_YEARS = 3;
 
 export interface DemoChoice {
@@ -112,9 +112,7 @@ export class DemoService {
     }));
 
     // 실습 — 채점하지 않고 "실제 시험과 동일한 형태"만 보여주기 위한 용도.
-    //   L3 (운영기획서 v1.1): 4 실습형 (현업적용·지시설계·분석검증·리스크판단)
-    //                       stratified 1 per type
-    //   L2 / L1            : 1 sample task (legacy demo behaviour, preserved)
+    // 모든 레벨(L3/L2/L1) 공통: 대표 실습 1개만 노출한다.
     const tasks = await this.prisma.taskTemplate.findMany({
       where: { certType, level },
       select: {
@@ -129,34 +127,8 @@ export class DemoService {
 
     const practicalTasks: DemoPracticalTask[] = [];
     if (tasks.length > 0) {
-      if (level === 'L3') {
-        const wantedTypes = [...L3_CANONICAL_TYPES];
-        const byType = new Map<string, typeof tasks>();
-        for (const t of tasks) {
-          const key = normalizeL3TaskType(t.taskType, t.title);
-          if (!key) continue;
-          const list = byType.get(key) ?? [];
-          list.push(t);
-          byType.set(key, list);
-        }
-        for (const type of wantedTypes) {
-          const pool = byType.get(type);
-          if (pool && pool.length > 0) {
-            const t = pool[Math.floor(Math.random() * pool.length)];
-            practicalTasks.push(mapTaskToDemoPractical(t));
-          }
-        }
-        // If L3 practicals haven't been seeded yet, fall back to a single
-        // random task so the demo still renders something meaningful instead
-        // of an empty practical section.
-        if (practicalTasks.length === 0) {
-          const t = tasks[Math.floor(Math.random() * tasks.length)];
-          practicalTasks.push(mapTaskToDemoPractical(t));
-        }
-      } else {
-        const t = tasks[Math.floor(Math.random() * tasks.length)];
-        practicalTasks.push(mapTaskToDemoPractical(t));
-      }
+      const t = tasks[Math.floor(Math.random() * tasks.length)];
+      practicalTasks.push(mapTaskToDemoPractical(t));
     }
 
     // Deprecated single-task alias kept for one release so older shipped

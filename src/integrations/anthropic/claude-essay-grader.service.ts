@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ExamPart } from '@prisma/client';
 import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'node:crypto';
 import type { GradingBand, RiskSeverity } from '../../modules/grading/grading-config';
@@ -19,12 +20,22 @@ export interface EssayGradeTask {
   benchmarkFail?: string | null;
   riskCriteria?: string | null;
   forbiddenRules?: string | null;
+  /** Authored required structure/template (TaskTemplate.requiredStructure) — key for DELIVERABLE. */
+  requiredStructure?: string | null;
+  /** L3 실습형 only — practice type (현업적용형 등), shown as grader context. */
+  practiceType?: string | null;
+  /** L3 실습형 only — expected response format, serialized for the prompt. */
+  responseFormat?: string | null;
+  /** L3 실습형 only — authoritative answer key used as the grading ground truth. */
+  answerKey?: string | null;
 }
 
 export interface EssayGradeSubmission {
   contentText: string;
   /** EssayAnswer.aiChatLog — the in-exam assistant transcript, scanned for prohibited use. */
   aiChatLog?: unknown;
+  /** AXIS-C code tasks — Judge0 execution pass/fail summary, injected as grading context. */
+  executionSummary?: string | null;
 }
 
 export interface EssayGradeCriterionScore {
@@ -83,6 +94,35 @@ const SYSTEM_PROMPT = `당신은 AXIS 실무 자격시험(AXIS / AXIS-C / AXIS-H
 confidence(0~1): 채점 확신도를 정직하게 보고하세요. 답안이 모호하거나 루브릭 적용이 애매하면 낮게 보고합니다.
 
 반드시 \`submit_grading\` 도구로만 결과를 제출하세요.`;
+
+/**
+ * Part-specific channels appended to the base SYSTEM_PROMPT. One
+ * ClaudeEssayGraderService, but the rubric emphasis differs by exam part
+ * (운영기획서 §8/§10): L2 practical weighs deliverable quality + AI-verification,
+ * L1 Part B weighs the 10-section execution plan, L1 Part C weighs crisis-response
+ * essays. Varying the system text also makes the promptHash differ per part.
+ */
+const PART_GUIDANCE: Partial<Record<ExamPart, string>> = {
+  [ExamPart.PRACTICAL]: `[실기형(PRACTICAL · L2) 채점 지침]
+- 업무 결과물(deliverable)의 완성도·정확성·실무 적용 가능성을 최우선으로 평가하세요.
+- aiChatLog(시험 중 AI 대화 기록)를 반드시 검토하세요. AI가 생성한 내용을 검증 없이 그대로 복사·붙여넣기한 정황이 보이면 감점하고 riskFlag(MED 이상)로 표기하세요.
+- 수치·주장에 대한 검증 근거(verification evidence)와 리스크 통제(risk control) 서술은 가점 요소로 평가하세요.
+- 과제가 프롬프트/작업 로그 제출을 요구했는데 누락된 경우 감점하세요.`,
+  [ExamPart.DELIVERABLE]: `[실행계획서(DELIVERABLE · L1 Part B) 채점 지침]
+- AX 실행계획서 10개 섹션 템플릿의 커버리지를 핵심 기준으로 평가하세요. [필수 구성(required structure)]이 제공된 경우 그 항목별 충족도를 우선 기준으로 삼으세요.
+- 거버넌스(governance), KPI·성과지표, 리스크 관리 항목의 구체성과 실행 가능성을 중점 평가하세요.
+- 형식만 채우고 내용이 공허하거나 일반론에 그친 섹션은 낮게 채점하세요.`,
+  [ExamPart.ESSAY]: `[서술형(ESSAY · L1 Part C) 채점 지침]
+- 위기 대응 서술을 평가합니다. 즉각 조치(immediate action), 영향 범위(impact scope), 재발 방지(recurrence prevention), 이해관계자 커뮤니케이션(communication), 실행 가능성(feasibility)을 중심으로 채점하세요.
+- 서술형 답안은 실행계획서보다 짧은 것이 정상입니다. 실행계획서 수준의 섹션 구성/분량이 없다는 이유로 감점하지 마세요.
+- 핵심 판단의 타당성과 논리적 일관성을 우선 평가하세요.`,
+};
+
+/** Base grading prompt + the part-specific emphasis channel (if any). */
+function partSystemPrompt(part: ExamPart): string {
+  const suffix = PART_GUIDANCE[part];
+  return suffix ? `${SYSTEM_PROMPT}\n\n${suffix}` : SYSTEM_PROMPT;
+}
 
 const GRADING_TOOL = {
   name: 'submit_grading',
@@ -149,14 +189,19 @@ export class ClaudeEssayGraderService {
    * the task rubric and anchor exemplars. Never throws — returns
    * `{ degraded: true }` so manual grading always remains possible.
    */
-  async grade(task: EssayGradeTask, submission: EssayGradeSubmission): Promise<EssayGradeResult> {
+  async grade(
+    task: EssayGradeTask,
+    submission: EssayGradeSubmission,
+    gradingPart: ExamPart,
+  ): Promise<EssayGradeResult> {
     const maxTotal = task.criteria.reduce((s, c) => s + c.maxPoints, 0) || task.points;
     const t0 = Date.now();
 
+    const systemPrompt = partSystemPrompt(gradingPart);
     const taskContext = this.buildTaskContext(task);
     const userContent = this.buildUserContent(task, submission);
     const promptHash = createHash('sha256')
-      .update(SYSTEM_PROMPT)
+      .update(systemPrompt)
       .update(taskContext)
       .update(userContent)
       .digest('hex')
@@ -187,7 +232,7 @@ export class ClaudeEssayGraderService {
           model: MODEL_ID,
           max_tokens: MAX_TOKENS,
           system: [
-            { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
             { type: 'text', text: taskContext, cache_control: { type: 'ephemeral' } },
           ],
           tools: [{ ...GRADING_TOOL, cache_control: { type: 'ephemeral' } }],
@@ -240,8 +285,17 @@ export class ClaudeEssayGraderService {
       .join('\n\n');
 
     return (
-      `[과제] ${task.title}\n\n[시나리오]\n${task.scenario}\n\n` +
+      `[과제] ${task.title}` +
+      (task.practiceType ? ` (실습 유형: ${task.practiceType})` : '') +
+      `\n\n[시나리오]\n${task.scenario}\n\n` +
       `[루브릭 기준] (각 기준 key별로 채점)\n${criteriaText}\n\n` +
+      (task.requiredStructure ? `[필수 구성(required structure)]\n${task.requiredStructure}\n\n` : '') +
+      (task.responseFormat ? `[응답 형식(responseFormat)]\n${task.responseFormat}\n\n` : '') +
+      (task.answerKey
+        ? `[정답 키(answerKey)] — 이 정답 키를 채점의 기준 정답으로 삼으세요. ` +
+          `응시자의 선택 항목과 서술이 정답 키와 얼마나 일치하는지에 따라 각 루브릭 기준 점수를 부여하세요.\n` +
+          `${task.answerKey}\n\n`
+        : '') +
       (task.modelAnswer ? `[기준 답안]\n${task.modelAnswer}\n\n` : '') +
       (benchmarks ? `[수준별 예시답안]\n${benchmarks}\n\n` : '') +
       (task.riskCriteria ? `[리스크 채점 기준]\n${task.riskCriteria}\n\n` : '') +
@@ -252,12 +306,34 @@ export class ClaudeEssayGraderService {
   private buildUserContent(task: EssayGradeTask, submission: EssayGradeSubmission): string {
     const keys = task.criteria.map((c) => c.key).join(', ');
     const chatLog = this.summariseChatLog(submission.aiChatLog);
+    const execBlock = submission.executionSummary
+      ? `\n\n[코드 실행 결과 요약(Judge0)]\n${submission.executionSummary}`
+      : '';
     return (
       `다음 응시자 답안을 위 루브릭에 따라 채점하세요. criterionScores에는 반드시 ` +
       `다음 key를 모두 포함하세요: ${keys}.\n\n` +
-      `[응시자 답안]\n${submission.contentText?.trim() || '(빈 답안)'}\n\n` +
-      `[시험 중 AI 어시스턴트 대화 기록]\n${chatLog}`
+      `[응시자 답안]\n${this.formatSubmissionText(submission.contentText)}` +
+      execBlock +
+      `\n\n[시험 중 AI 어시스턴트 대화 기록]\n${chatLog}`
     );
+  }
+
+  /**
+   * L3 실습형 answers are persisted as a JSON string in EssayAnswer.contentText
+   * (structured selections + short reason). Pretty-print it so the grader reads
+   * the structure clearly; free-text L1/L2 answers pass through unchanged.
+   */
+  private formatSubmissionText(contentText: string | undefined): string {
+    const raw = contentText?.trim();
+    if (!raw) return '(빈 답안)';
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        return JSON.stringify(JSON.parse(raw), null, 2);
+      } catch {
+        return raw;
+      }
+    }
+    return raw;
   }
 
   private summariseChatLog(log: unknown): string {

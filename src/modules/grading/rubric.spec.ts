@@ -1,4 +1,4 @@
-import { parseRubric } from './rubric';
+import { parseRubric, parseL3Reference } from './rubric';
 
 describe('parseRubric', () => {
   it('honours explicit (n점) weights when they sum to the task total', () => {
@@ -42,5 +42,61 @@ describe('parseRubric', () => {
     // remaining 20 split across 2 unweighted → 10 each
     expect(out[1].maxPoints).toBe(10);
     expect(out[2].maxPoints).toBe(10);
+  });
+
+  it('parses the L3 실습형 wrapper — inner rubric array → weighted criteria', () => {
+    const rubric = {
+      itemId: 'AXIS-L3-P-SAMPLE-001',
+      practiceType: '현업적용형',
+      answerKey: { key_reason: '...' },
+      rubric: [
+        { criterion: '핵심 판단', points: 4, description: 'AI 활용 작업 선정의 타당성' },
+        { criterion: '근거 서술', points: 3, description: '80~150자 근거의 구체성' },
+        { criterion: '누락/오류 방지', points: 3, description: '제외 입력자료 식별' },
+      ],
+    };
+    const out = parseRubric(rubric, 10);
+    expect(out.map((c) => c.maxPoints)).toEqual([4, 3, 3]);
+    expect(out.map((c) => c.key)).toEqual(['C1', 'C2', 'C3']);
+    expect(out.reduce((s, c) => s + c.maxPoints, 0)).toBe(10);
+    expect(out[0].label).toContain('핵심 판단');
+  });
+
+  it('does NOT collapse an L3 rubric into a single Overall criterion', () => {
+    const rubric = {
+      practiceType: '분석·검증형',
+      rubric: [
+        { criterion: '문제 식별', points: 5 },
+        { criterion: '최초 조치', points: 5 },
+      ],
+    };
+    const out = parseRubric(rubric, 10);
+    expect(out).toHaveLength(2);
+    expect(out.map((c) => c.maxPoints)).toEqual([5, 5]);
+  });
+});
+
+describe('parseL3Reference', () => {
+  it('extracts practiceType, responseFormat, answerKey and riskFlags from the L3 wrapper', () => {
+    const rubric = {
+      practiceType: '리스크 판단형',
+      responseFormat: { select_highest_risk: ['개인정보 외부 입력'], short_reason: '80~150자' },
+      answerKey: { highest_risk: '개인정보 외부 입력', immediate_action: '입력 중단' },
+      riskFlags: ['개인정보 입력', '식별정보 노출'],
+      rubric: [{ criterion: '판단', points: 10 }],
+    };
+    const ref = parseL3Reference(rubric);
+    expect(ref).not.toBeNull();
+    expect(ref!.practiceType).toBe('리스크 판단형');
+    expect(ref!.answerKey).toContain('개인정보 외부 입력');
+    expect(ref!.responseFormat).toContain('short_reason');
+    expect(ref!.riskFlags).toContain('식별정보 노출');
+  });
+
+  it('returns null for legacy L1/L2 rubric shapes', () => {
+    expect(parseL3Reference({ criteria: ['A(10점)', 'B(10점)'] })).toBeNull();
+    expect(parseL3Reference({ raw: 'a | b | c' })).toBeNull();
+    expect(parseL3Reference('freeform string')).toBeNull();
+    expect(parseL3Reference(null)).toBeNull();
   });
 });

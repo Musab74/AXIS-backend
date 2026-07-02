@@ -33,6 +33,7 @@
     "smoke:demo": "ts-node src/smoke-test-demo.ts",
     "smoke:exam": "ts-node src/smoke-test-exam.ts",
     "smoke:scoring": "ts-node src/smoke-test-scoring.ts",
+    "smoke:all": "ts-node src/smoke-test-all.ts",
     "smoke:ai": "ts-node src/smoke-test-ai-assistant.ts",
     "smoke:gemini": "ts-node src/smoke-test-gemini.ts",
     "smoke:nice": "bash scripts/smoke-nice.sh",

@@ -64,20 +64,24 @@ const CERT_TIMING_OVERRIDES: Partial<Record<CertType, Partial<Record<CertLevel, 
 
 /**
  * Reads `L3_PRACTICALS_ENABLED` at the call site (not module-load) so toggling
- * the env var in tests/dev does not require a server restart. The flag flips
- * L3 from MCQ-only → MCQ + 4 실습형 per the new 운영기획서:
- *   60 min written + 20 min practical = 80 min total,
+ * the env var in tests/dev does not require a server restart. Defaults ON: L3
+ * runs the new 운영기획서 shape — MCQ + 4 실습형:
+ *   40 min written + 20 min practical = 60 min total,
  *   100 점 (객관식 60 + 실습형 40), pass 70, practical floor 60% (24/40).
+ * Environments where the L3 practical pool has not been seeded fall back to
+ * legacy MCQ-only automatically (session start finds 0 practical tasks), so
+ * flipping the default ON is safe. Set the env var to 'false' to force legacy.
  * In-flight sessions are unaffected because their paper is already frozen at
  * `/cbt/sessions/:id/start`.
  */
 function isL3PracticalsEnabled(): boolean {
-  return (process.env.L3_PRACTICALS_ENABLED || 'false').toLowerCase() === 'true';
+  return (process.env.L3_PRACTICALS_ENABLED || 'true').toLowerCase() === 'true';
 }
 
 const L3_TIMING_WITH_PRACTICALS: LevelTiming = {
-  totalMinutes: 80,
-  writtenMinutes: 60,
+  // 운영기획서: 객관식 40문항 40분 + 실습형 4문항 20분 = 60분 총.
+  totalMinutes: 60,
+  writtenMinutes: 40,
   practicalMinutes: 20,
   passWritten: 60,
   passPractical: 60,

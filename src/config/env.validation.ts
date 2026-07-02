@@ -71,8 +71,9 @@ export const envValidationSchema = Joi.object({
   // MUST stay false on production.
   CBT_SKIP_IDENTITY_CHECK: Joi.string().valid('true', 'false').default('false'),
 
-  // L3 실습형 4문항 wire-up. When 'true', L3 spec flips to 60+20 min, 60/40
-  // weighted scoring, pass 70, practical floor 60%. Requires seed-l3-practicals
-  // to have inserted the 12 L3 TaskTemplate rows first.
-  L3_PRACTICALS_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  // L3 실습형 4문항 wire-up. Default 'true': L3 runs 40+20 min, 60/40 weighted
+  // scoring, pass 70, practical floor 60%. Requires seed-l3-practicals to have
+  // inserted the L3 TaskTemplate rows; environments without them fall back to
+  // legacy MCQ-only at session start. Set 'false' to force legacy MCQ-only.
+  L3_PRACTICALS_ENABLED: Joi.string().valid('true', 'false').default('true'),
 }).unknown(true);

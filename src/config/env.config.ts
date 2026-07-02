@@ -113,10 +113,10 @@ export const envConfig = () => ({
 
   cbt: {
     skipIdentityCheck: (process.env.CBT_SKIP_IDENTITY_CHECK || 'false').toLowerCase() === 'true',
-    // L3 실습형 4문항(현업적용·지시설계·분석검증·리스크판단) wire-up. When false,
-    // L3 keeps its legacy MCQ-only spec (60 min, pass 60). When true, L3 adopts
-    // the new 운영기획서: 60+20 min, 100점(60+40), 합격 70, 실습형 60% floor.
-    // Flip per-environment after seed-l3-practicals.ts has been run.
-    l3PracticalsEnabled: (process.env.L3_PRACTICALS_ENABLED || 'false').toLowerCase() === 'true',
+    // L3 실습형 4문항(현업적용·지시설계·분석검증·리스크판단) wire-up. Default ON:
+    // L3 adopts the new 운영기획서 — 40+20 min, 100점(60+40), 합격 70, 실습형 60% floor.
+    // Environments without the seeded L3 practical pool fall back to legacy
+    // MCQ-only automatically. Set 'false' to force the legacy MCQ-only spec.
+    l3PracticalsEnabled: (process.env.L3_PRACTICALS_ENABLED || 'true').toLowerCase() === 'true',
   },
 });

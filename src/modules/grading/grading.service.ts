@@ -9,6 +9,7 @@ import { CertificatesService } from '../certificates/certificates.service';
 import { CbtSessionsService } from '../cbtSessions/cbt-sessions.service';
 import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
 import { EssayGradingService } from './essay-grading.service';
+import { L3AutoFinalizeService } from './l3-autofinalize.service';
 
 @Injectable()
 export class GradingService {
@@ -22,6 +23,7 @@ export class GradingService {
     private readonly cbtSessions: CbtSessionsService,
     private readonly essayGrading: EssayGradingService,
     private readonly pause: ExamSessionPauseService,
+    private readonly l3AutoFinalize: L3AutoFinalizeService,
   ) {}
 
   async submit(userId: string, sessionId: string) {
@@ -162,10 +164,9 @@ export class GradingService {
     const timing = getTiming(session.certType, session.level);
 
     if (hasPractical) {
-      // Practical requires human/AI review — session is SUBMITTED, not GRADED.
-      // L1/L2 pass/fail is decided at finalize on the weighted 100-pt total
-      // (LEVEL_SCORING), so we do NOT assert a written threshold here — the MC
-      // score is advisory until the practical sections are scored.
+      // Baseline: SUBMITTED (not GRADED). L1/L2 pass/fail is decided at finalize
+      // on the weighted 100-pt total, so we do NOT assert a written threshold
+      // here — the MC score is advisory until the practical sections are scored.
       await this.prisma.examSession.update({
         where: { id: sessionId },
         data: {
@@ -179,16 +180,22 @@ export class GradingService {
         },
       });
 
-      // Kick off the AI first-pass grade in the background. It writes advisory
-      // scores onto the EssayAnswer rows for the grading queue; a human still
-      // finalizes. Fire-and-forget — the submission has already committed and
-      // an AI failure must never block the candidate (degrades to no-op when
-      // ANTHROPIC_API_KEY is absent).
-      void this.essayGrading
-        .aiPrescoreSession(sessionId)
-        .catch((err) =>
-          this.logger.warn(`AI prescore failed for session ${sessionId}: ${(err as Error).message}`),
-        );
+      if (session.level === 'L3') {
+        // L3-with-practicals (운영기획서 §10): await the AI prescore and, when the
+        // AI is confident (mandatoryReview=false) and every task scored, GRADE in
+        // this request. Timeout-safe — a slow prescore leaves the session
+        // SUBMITTED for the expert queue (background prescore keeps running).
+        await this.l3AutoFinalize.tryFinalizeOnSubmit(sessionId, tasks, writtenPct);
+      } else {
+        // L1/L2 — AI first-pass runs in the background; a human finalizes.
+        // Fire-and-forget: the submission has already committed and an AI failure
+        // must never block the candidate (no-op without ANTHROPIC_API_KEY).
+        void this.essayGrading
+          .aiPrescoreSession(sessionId)
+          .catch((err) =>
+            this.logger.warn(`AI prescore failed for session ${sessionId}: ${(err as Error).message}`),
+          );
+      }
     } else {
       // L3 — written only; grade immediately.
       const writtenPassed = writtenPct >= timing.passWritten && !anySubjectFailed;

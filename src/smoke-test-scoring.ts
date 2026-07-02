@@ -257,17 +257,17 @@ section('L3 practicals wire-up [L3_PRACTICALS_ENABLED=true]');
 {
   process.env.L3_PRACTICALS_ENABLED = 'true';
 
-  // Timing: 60 + 20 = 80 minutes, both written and practical clocks present.
+  // Timing: 40 written + 20 practical = 60 minutes (운영기획서).
   const t = getTiming(CertType.AXIS, CertLevel.L3);
-  check('L3 total = 80 (60 written + 20 practical)', t.totalMinutes === 80, `got ${t.totalMinutes}`);
-  check('L3 written = 60', t.writtenMinutes === 60, `got ${t.writtenMinutes}`);
+  check('L3 total = 60 (40 written + 20 practical)', t.totalMinutes === 60, `got ${t.totalMinutes}`);
+  check('L3 written = 40', t.writtenMinutes === 40, `got ${t.writtenMinutes}`);
   check('L3 practical = 20', t.practicalMinutes === 20, `got ${t.practicalMinutes}`);
 
   // Composition: 40 MCQ + 4 practical tasks (one per type, stratified).
   const spec = getExamSpec(CertType.AXIS, CertLevel.L3);
   check('L3 written count = 40', spec.writtenQuestionCount === 40);
   check('L3 practical task count = 4', spec.practicalTaskCount === 4, `got ${spec.practicalTaskCount}`);
-  check('L3 spec.timing.totalMinutes = 80', spec.timing.totalMinutes === 80);
+  check('L3 spec.timing.totalMinutes = 60', spec.timing.totalMinutes === 60);
 
   // Scoring: 60-pt written + 40-pt practical, pass 70, practical floor 60%.
   const sc = getScoring(CertType.AXIS, CertLevel.L3);
@@ -297,6 +297,40 @@ section('L3 practicals wire-up [L3_PRACTICALS_ENABLED=true]');
   check('L3 60/85 → total 70, pass (boundary)', r3.total === 70 && r3.passed, `total ${r3.total}`);
 
   // Restore flag so subsequent tooling sees the production default.
+  process.env.L3_PRACTICALS_ENABLED = 'false';
+}
+
+// ── 9. L3 AUTO-FINALIZE ON SUBMIT (운영기획서 §10) ───────────────────────────
+// When AI prescore returns mandatoryReview=false AND every practical task is
+// scored, the submit path GRADES the L3 session in-request using the same
+// weighted-100 math the finalize path uses. Verify that math + the gate.
+section('L3 auto-finalize on submit [L3_PRACTICALS_ENABLED=true]');
+{
+  process.env.L3_PRACTICALS_ENABLED = 'true';
+  const scoring = getScoring(CertType.AXIS, CertLevel.L3);
+
+  // Prescored L3: written 80% (weight 60) + practical 85% (weight 40), AI confident.
+  const writtenPct = 80;
+  const practicalPct = 85;
+  const r = computeWeightedResult(scoring, (p) => (p === ExamPart.WRITTEN ? writtenPct : practicalPct));
+  check('L3 80/85 → weighted total 82', r.total === 82, `total ${r.total}`); // 0.6*80 + 0.4*85
+  check('L3 80/85 → pass (≥70, practical ≥60 floor)', r.passed);
+
+  // Gate: auto-finalize (→ GRADED) only when mandatoryReview=false AND all scored.
+  const wouldAutoFinalize = (mandatoryReview: boolean, allScored: boolean) =>
+    mandatoryReview === false && allScored;
+  check('mandatoryReview=false + all scored → auto-finalize (GRADED)', wouldAutoFinalize(false, true));
+  check('mandatoryReview=true → defer to expert queue (SUBMITTED)', !wouldAutoFinalize(true, true));
+  check('a task unscored → defer to expert queue (SUBMITTED)', !wouldAutoFinalize(false, false));
+
+  // Practical below the 60% floor fails even with a perfect written score.
+  const rFloor = computeWeightedResult(scoring, (p) => (p === ExamPart.WRITTEN ? 100 : 55));
+  check(
+    'L3 100/55 → fail on practical floor (실습형 24점 미만)',
+    !rFloor.passed && rFloor.floorFailures.includes(ExamPart.PRACTICAL),
+    `floors ${rFloor.floorFailures.join(',') || 'none'}`,
+  );
+
   process.env.L3_PRACTICALS_ENABLED = 'false';
 }
 

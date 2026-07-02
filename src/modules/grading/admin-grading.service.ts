@@ -123,8 +123,10 @@ export class AdminGradingService {
       where: {
         status: { in: [ExamSessionStatus.SUBMITTED, ExamSessionStatus.GRADED] },
         ...(allowed ? { certType: { in: allowed } } : {}),
-        // Experts grade L1/L2 practical work — L3 is auto-graded at submit.
-        ...(isExpertOnly ? { level: { in: [CertLevel.L1, CertLevel.L2] } } : {}),
+        // Experts grade any session that HAS a practical section. That is every
+        // L1/L2 and — when L3_PRACTICALS_ENABLED — L3-with-practicals too. Legacy
+        // MCQ-only L3 (auto-graded at submit, no essay rows) is excluded.
+        ...(isExpertOnly ? { essayAnswers: { some: {} } } : {}),
       },
       include: {
         user: { select: { name: true } },
@@ -232,12 +234,14 @@ export class AdminGradingService {
    */
   private async claimSessionIfUnassigned(
     sessionId: string,
-    level: CertLevel,
+    _level: CertLevel,
     assignedExpertId: string | null,
     viewer: GradingViewer | undefined,
   ): Promise<string | null> {
     if (!viewer || !this.isExpertOnlyViewer(viewer)) return assignedExpertId;
-    if (level === CertLevel.L3) return assignedExpertId;
+    // Callers reach this only after confirming the session has a practical
+    // section (finalize / saveExpertScore guard on essayAnswers), so no
+    // level short-circuit is needed — L3-with-practicals claims like L1/L2.
     if (assignedExpertId) return assignedExpertId;
 
     const updated = await this.prisma.examSession.updateMany({
@@ -264,10 +268,13 @@ export class AdminGradingService {
    * may be assigned regardless of competency series. Records an audit row.
    */
   async assignExpert(actorId: string, sessionId: string, expertId: string): Promise<{ ok: true }> {
-    const session = await this.prisma.examSession.findUnique({ where: { id: sessionId } });
+    const session = await this.prisma.examSession.findUnique({
+      where: { id: sessionId },
+      include: { _count: { select: { essayAnswers: true } } },
+    });
     if (!session) throw new NotFoundException('Session not found');
-    if (session.level === CertLevel.L3) {
-      throw new BadRequestException('L3 sessions are auto-graded — no expert assignment.');
+    if (session._count.essayAnswers === 0) {
+      throw new BadRequestException('This session has no practical section — no expert assignment needed.');
     }
     await this.assertExpertQualified(expertId);
 
@@ -412,6 +419,11 @@ export class AdminGradingService {
           aiRationale: a.aiRationale,
           aiCriterionScores: a.aiCriterionScores,
           aiRiskFlags: a.aiRiskFlags,
+          // Grading provenance for the reviewer UI: which grader produced the
+          // first pass ('l3-answer-key' | 'claude-opus-4-8' | 'hybrid-l3+claude'
+          // | 'judge0-autotest') and its raw earned points.
+          aiModel: a.aiModel,
+          earnedPoints: a.earnedPoints,
           expertScore: a.expertScore,
           expertNotes: parsedNotes.notes || null,
         };
@@ -480,8 +492,8 @@ export class AdminGradingService {
       include: { essayAnswers: { select: { id: true, taskId: true, aiPreScore: true } } },
     });
     if (!session) throw new NotFoundException('Session not found');
-    if (session.level === CertLevel.L3) {
-      throw new BadRequestException('L3 sessions are graded automatically — no expert scoring needed.');
+    if (session.essayAnswers.length === 0) {
+      throw new BadRequestException('This session has no practical section — no expert scoring needed.');
     }
     if (session.status !== ExamSessionStatus.SUBMITTED) {
       throw new ConflictException(
@@ -633,17 +645,34 @@ export class AdminGradingService {
         `Cannot finalize a session in status ${session.status} — it must be SUBMITTED first.`,
       );
     }
-    if (session.level === CertLevel.L3) {
+    // A session with no practical/essay rows has nothing to finalize — its MCQ
+    // written section was already auto-graded at submit (legacy MCQ-only L3).
+    // L3-with-practicals (L3_PRACTICALS_ENABLED) DOES create practical rows and
+    // flows through the same AI-prescore → expert-finalize path as L1/L2.
+    if (session.essayAnswers.length === 0) {
       throw new BadRequestException(
-        'L3 sessions are graded automatically at submit time and have no practical to finalize.',
+        'This session has no practical section to finalize — it was auto-graded at submit time.',
+      );
+    }
+
+    const isAdmin = actorRoles.some((r) =>
+      r === 'SUPER_ADMIN' || r === 'GRADING_ADMIN' || r === 'EXAM_ADMIN',
+    );
+
+    // ── Guardrail 0 (L3): auto-finalize territory ────────────────────────────
+    // L3-with-practicals auto-finalizes on submit when the AI is confident
+    // (mandatoryReview=false). A manual finalize is therefore only allowed when
+    // the session genuinely needs review (mandatoryReview=true) or an admin
+    // overrides — otherwise an expert could re-open a confident, auto-graded L3.
+    if (session.level === CertLevel.L3 && !session.mandatoryReview && !isAdmin) {
+      throw new ForbiddenException(
+        'This L3 session did not require expert review (auto-graded on submit). ' +
+          'Only a grading admin can manually finalize it.',
       );
     }
 
     // ── Guardrail 1: assignment enforcement ──────────────────────────────────
     // If an expert is assigned, only that expert (or an admin) may finalize.
-    const isAdmin = actorRoles.some((r) =>
-      r === 'SUPER_ADMIN' || r === 'GRADING_ADMIN' || r === 'EXAM_ADMIN',
-    );
     const effectiveAssignee = await this.claimSessionIfUnassigned(
       session.id,
       session.level,
@@ -958,11 +987,11 @@ export class AdminGradingService {
   private derivePracticalState(s: {
     level: CertLevel;
     status: ExamSessionStatus;
+    mandatoryReview: boolean;
     essayAnswers: { aiPreScore: number | null; expertScore: number | null }[];
   }): PracticalState {
-    if (s.level === CertLevel.L3) {
-      return s.status === ExamSessionStatus.GRADED ? 'final' : 'auto';
-    }
+    // No practical section (legacy MCQ-only L3) → auto-graded at submit.
+    // L3-with-practicals has essay rows and flows through the AI/expert states.
     if (s.essayAnswers.length === 0) {
       return s.status === ExamSessionStatus.GRADED ? 'final' : 'auto';
     }
@@ -975,10 +1004,15 @@ export class AdminGradingService {
         e.expertScore != null &&
         Math.abs(e.expertScore - e.aiPreScore) > GRADING_CONFIG.DISPUTE_DELTA_POINTS,
     );
-    if (s.status === ExamSessionStatus.GRADED && allExpert) return 'final';
+    // GRADED is terminal. L3 can reach GRADED via auto-finalize WITHOUT expert
+    // scores (AI-confident), so don't require allExpert for L3.
+    if (s.status === ExamSessionStatus.GRADED && (allExpert || s.level === CertLevel.L3)) return 'final';
     if (disputed) return 'expert_disputed';
     if (anyExpert) return 'expert_reviewing';
     if (anyAi) return 'ai_graded';
+    // Still flagged for mandatory review but no AI/expert scores yet → pending
+    // review, not "auto done" (keeps it out of the auto_done queue tab).
+    if (s.mandatoryReview) return 'ai_graded';
     return 'auto';
   }
 }
