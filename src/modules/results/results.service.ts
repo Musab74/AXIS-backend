@@ -309,6 +309,7 @@ export class ResultsService {
       cutScore: 70,
       certType: reg.certType,
       level: reg.level,
+      roundNumber: reg.schedule.roundNumber,
       roundLabel: this.formatRoundLabel(
         reg.schedule.certType,
         reg.schedule.level,
