@@ -1,6 +1,8 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { CertType } from '@prisma/client';
+import { PublicResultLookupDto } from './dto/public-result-lookup.dto';
 import { ResultsService } from './results.service';
 
 @ApiTags('Results (public)')
@@ -19,6 +21,16 @@ export class PublicResultsController {
     const page = this.parsePositiveInt(pageRaw, 1, 1, 10_000);
     const pageSize = this.parsePositiveInt(pageSizeRaw, 10, 5, 50);
     return this.svc.listPublicRounds({ certType: parsed, page, pageSize });
+  }
+
+  // Tight per-IP throttle: identity facts are the only gate, so brute-forcing
+  // name/birth-date combinations must be expensive.
+  @Post('lookup')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOperation({ summary: '접수번호 + 이름 + 생년월일로 본인 성적 조회 (비로그인)' })
+  lookup(@Body() dto: PublicResultLookupDto) {
+    return this.svc.publicLookup(dto);
   }
 
   @Get(':scheduleId')

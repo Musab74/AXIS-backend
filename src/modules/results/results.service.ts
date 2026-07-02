@@ -255,6 +255,87 @@ export class ResultsService {
     };
   }
 
+  /**
+   * Public (no-login) score lookup by registration number + name + birth date.
+   *
+   * Every failure mode that involves an identity mismatch returns the same
+   * NOT_FOUND so the endpoint can't be used to probe which registration
+   * numbers exist or whose they are. NOT_ANNOUNCED is only revealed after
+   * the caller has proven all three identity facts.
+   */
+  async publicLookup(input: { registrationNumber: string; name: string; birthDate: string }) {
+    const NOT_FOUND = { status: 'NOT_FOUND' as const };
+
+    const regNo = input.registrationNumber.trim();
+    if (!regNo) return NOT_FOUND;
+
+    const reg = await this.prisma.registration.findUnique({
+      where: { registrationNumber: regNo },
+      include: {
+        user: { select: { name: true, birthDate: true } },
+        schedule: true,
+      },
+    });
+    if (!reg) return NOT_FOUND;
+    if (
+      reg.status !== RegistrationStatus.PAID &&
+      reg.status !== RegistrationStatus.EXAM_COMPLETED
+    ) {
+      return NOT_FOUND;
+    }
+    if (!this.namesMatch(reg.user.name, input.name)) return NOT_FOUND;
+    // No birth date on file → the second factor can't be verified, so the
+    // public lookup refuses; the user can still see results via My Page.
+    if (!this.birthDatesMatch(reg.user.birthDate, input.birthDate)) return NOT_FOUND;
+
+    if (reg.schedule.status !== ScheduleStatus.COMPLETED) {
+      return { status: 'NOT_ANNOUNCED' as const };
+    }
+
+    const session = await this.prisma.examSession.findFirst({
+      where: { registrationId: reg.id, status: ExamSessionStatus.GRADED },
+      orderBy: { attemptNo: 'desc' },
+      include: {
+        gradingResults: { orderBy: [{ part: 'asc' }, { subjectIndex: 'asc' }] },
+      },
+    });
+    // Round announced but this candidate's grading isn't finalized yet.
+    if (!session) return { status: 'NOT_ANNOUNCED' as const };
+
+    return {
+      status: 'RESULT' as const,
+      passed: session.passed === true,
+      totalScore: session.totalScore,
+      cutScore: 70,
+      certType: reg.certType,
+      level: reg.level,
+      roundLabel: this.formatRoundLabel(
+        reg.schedule.certType,
+        reg.schedule.level,
+        reg.schedule.roundNumber,
+      ),
+      examDate: reg.schedule.examDate.toISOString(),
+      sections: session.gradingResults.map((r) => ({
+        name: r.subjectName,
+        score: r.earned,
+        max: r.total,
+      })),
+    };
+  }
+
+  private namesMatch(stored: string, given: string): boolean {
+    const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+    const g = norm(given);
+    return g.length > 0 && norm(stored) === g;
+  }
+
+  private birthDatesMatch(stored: string | null, given: string): boolean {
+    if (!stored) return false;
+    const digits = (s: string) => s.replace(/\D/g, '');
+    const g = digits(given);
+    return g.length === 8 && digits(stored) === g;
+  }
+
   private resolvePublicationState(
     status: ScheduleStatus,
     examStartMs: number,
