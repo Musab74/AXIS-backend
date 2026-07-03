@@ -9,6 +9,13 @@ import {
 import { PrismaService } from '../../common/prisma.service';
 import { CertificatesService } from '../certificates/certificates.service';
 
+export type PublicRoundStatusFilter = 'announced' | 'grading' | 'upcoming';
+
+/** Nearest upcoming rounds shown publicly (the rolling generator makes many more). */
+const PUBLIC_UPCOMING_LIMIT = 15;
+/** Most recent grading/announced rounds shown publicly. */
+const PUBLIC_PAST_LIMIT = 50;
+
 @Injectable()
 export class ResultsService {
   constructor(
@@ -110,30 +117,40 @@ export class ResultsService {
   /**
    * Public summary rows for axisexam.com/results — driven by ExamSchedule + graded ExamSession rows.
    * Admins control visibility by setting schedule status (COMPLETED = 발표 완료).
+   *
+   * Public hygiene rules (admin endpoints are unaffected):
+   * - A schedule whose exam date has passed with zero confirmed registrations is
+   *   an unused auto-generated slot, not a real round → hidden.
+   * - Upcoming rounds are capped to the nearest PUBLIC_UPCOMING_LIMIT; past
+   *   (grading/announced) rounds to the most recent PUBLIC_PAST_LIMIT.
    */
-  async listPublicRounds(params: { certType?: CertType; page: number; pageSize: number }) {
+  async listPublicRounds(params: {
+    certType?: CertType;
+    status?: PublicRoundStatusFilter;
+    examDateFrom?: Date;
+    examDateTo?: Date;
+    page: number;
+    pageSize: number;
+  }) {
+    const examDateRange = {
+      ...(params.examDateFrom ? { gte: params.examDateFrom } : {}),
+      ...(params.examDateTo ? { lte: params.examDateTo } : {}),
+    };
     const where = {
       status: { not: ScheduleStatus.CANCELLED },
       ...(params.certType ? { certType: params.certType } : {}),
+      ...(Object.keys(examDateRange).length > 0 ? { examDate: examDateRange } : {}),
     };
     const page = Math.max(1, params.page);
     const pageSize = Math.min(50, Math.max(5, params.pageSize));
-    const skip = (page - 1) * pageSize;
 
-    const [total, schedules] = await Promise.all([
-      this.prisma.examSchedule.count({ where }),
-      this.prisma.examSchedule.findMany({
-        where,
-        orderBy: [{ examDate: 'desc' }, { certType: 'asc' }, { level: 'asc' }, { roundNumber: 'desc' }],
-        skip,
-        take: pageSize,
-      }),
-    ]);
-
-    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    const schedules = await this.prisma.examSchedule.findMany({
+      where,
+      orderBy: [{ examDate: 'desc' }, { certType: 'asc' }, { level: 'asc' }, { roundNumber: 'desc' }],
+    });
 
     if (schedules.length === 0) {
-      return { items: [], total, page, pageSize, totalPages };
+      return { items: [], total: 0, page, pageSize, totalPages: 0 };
     }
 
     const scheduleIds = schedules.map((s) => s.id);
@@ -143,7 +160,7 @@ export class ResultsService {
     ]);
     const now = Date.now();
 
-    const items = schedules.map((s) => {
+    const rows = schedules.map((s) => {
       const g = gradedBySchedule.get(s.id);
       const passCount = g?.passCount ?? 0;
       const failCount = g?.failCount ?? 0;
@@ -151,22 +168,49 @@ export class ResultsService {
       const examMs = s.examDate.getTime();
       const publicationState = this.resolvePublicationState(s.status, examMs, now);
       return {
-        scheduleId: s.id,
-        certType: s.certType,
-        level: s.level,
-        roundNumber: s.roundNumber,
-        year: s.year,
-        examDate: s.examDate.toISOString(),
-        scheduleStatus: s.status,
-        publicationState,
-        /** 결제·확정 접수 기준 (PAID + EXAM_COMPLETED) */
-        registeredCount,
-        /** 발표 완료 회차만 채워짐 */
-        passCount: publicationState === 'announced' ? passCount : null,
-        failCount: publicationState === 'announced' ? failCount : null,
-        labelRound: this.formatRoundLabel(s.certType, s.level, s.roundNumber),
+        examMs,
+        item: {
+          scheduleId: s.id,
+          certType: s.certType,
+          level: s.level,
+          roundNumber: s.roundNumber,
+          year: s.year,
+          examDate: s.examDate.toISOString(),
+          scheduleStatus: s.status,
+          publicationState,
+          /** 결제·확정 접수 기준 (PAID + EXAM_COMPLETED) */
+          registeredCount,
+          /** 발표 완료 회차만 채워짐 */
+          passCount: publicationState === 'announced' ? passCount : null,
+          failCount: publicationState === 'announced' ? failCount : null,
+          labelRound: this.formatRoundLabel(s.certType, s.level, s.roundNumber),
+        },
       };
     });
+
+    const visible = rows.filter(
+      (r) => !(r.examMs <= now && r.item.registeredCount === 0),
+    );
+
+    const upcoming = visible
+      .filter((r) => r.item.publicationState === 'upcoming')
+      .sort((a, b) => a.examMs - b.examMs)
+      .slice(0, PUBLIC_UPCOMING_LIMIT);
+    const past = visible
+      .filter((r) => r.item.publicationState !== 'upcoming')
+      .sort((a, b) => b.examMs - a.examMs)
+      .slice(0, PUBLIC_PAST_LIMIT);
+
+    const pool =
+      params.status === 'upcoming'
+        ? upcoming
+        : params.status === 'grading' || params.status === 'announced'
+          ? past.filter((r) => r.item.publicationState === params.status)
+          : [...upcoming, ...past];
+
+    const total = pool.length;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    const items = pool.slice((page - 1) * pageSize, page * pageSize).map((r) => r.item);
 
     return { items, total, page, pageSize, totalPages };
   }
