@@ -75,6 +75,13 @@ export interface AiReviewResult {
 }
 
 const CLAUDE_RL_TTL_SEC = 30;
+/**
+ * Cap for Gemini-only PHONE_DETECTED strikes (the no-Claude fallback path).
+ * Matches CLAUDE_RL_TTL_SEC so sustained phone use strikes at the same pace
+ * as the Claude-confirmed path — once per 30s — instead of once per 3s tick,
+ * which would terminate (3 strikes) within 9 seconds of continuous use.
+ */
+const PHONE_STRIKE_RL_TTL_SEC = 30;
 const DEDUPE_TTL_SEC = 60;
 /** Default Gemini suspicion threshold for general flags (hat, looking off, etc.) */
 const GEMINI_SUSPICION_THRESHOLD = 0.5;
@@ -221,19 +228,25 @@ export class AiProctorService {
     // Cost cap — Claude is rate-limited to once per CLAUDE_RL_TTL_SEC per session.
     const claudeAllowed = await this.acquireClaudeSlot(session.id);
     if (!claudeAllowed) {
-      // Redis-fallback path: when Redis is offline (acquireClaudeSlot returns
-      // false because we fail-CLOSED to protect Claude's cost cap), AND the
-      // Gemini flags are exclusively phone-class with confidence >= 0.6, we
-      // emit a MED verdict + PHONE_DETECTED strike directly. This stops Redis
-      // hiccups from giving a "free pass" on visible phone use, which is the
-      // most expensive cheating vector to miss. See plan Step 4.
-      const phoneOnly =
-        geminiRes.flags.length > 0 &&
-        geminiRes.flags.every((f) => PHONE_CLASS_FLAGS.has(f));
+      // Phone-class safety net. `!claudeAllowed` covers TWO situations and
+      // BOTH must still strike on a confident phone flag:
+      //   a) Redis offline — acquireClaudeSlot fails CLOSED to protect the
+      //      cost cap (the original fallback).
+      //   b) Claude slot on its 30s cooldown — at the exam's 3s AI-review
+      //      cadence, ANY earlier flag (a gaze glance, even one Claude later
+      //      rejected) used to push every phone flag in the next 30s into
+      //      persistSuspiciousOnly: no strike, verdict OK. An 8s phone pickup
+      //      inside that window was a guaranteed free pass — the exact "phone
+      //      not caught" report this fixes.
+      // `some` not `every`: looking down at a phone usually co-flags gaze, and
+      // that combination must not disqualify the phone strike. The dedicated
+      // phone-strike slot caps Gemini-only strikes at one per 30s so sustained
+      // use doesn't burn all 3 strikes in three consecutive ticks.
+      const phoneFlagged = geminiRes.flags.some((f) => PHONE_CLASS_FLAGS.has(f));
       if (
-        !this.redis.isReady() &&
-        phoneOnly &&
-        geminiRes.confidence >= REDIS_FALLBACK_PHONE_CONFIDENCE
+        phoneFlagged &&
+        geminiRes.confidence >= REDIS_FALLBACK_PHONE_CONFIDENCE &&
+        (await this.acquirePhoneStrikeSlot(session.id))
       ) {
         return this.handleRedisFallbackPhone(
           session,
@@ -243,6 +256,9 @@ export class AiProctorService {
           frame,
           screenFrame,
           dedupeKey,
+          this.redis.isReady()
+            ? 'claude-rate-limited+phone-class'
+            : 'redis-unavailable+phone-class',
         );
       }
 
@@ -765,10 +781,12 @@ export class AiProctorService {
   }
 
   /**
-   * Redis-offline fallback for phone-class flags. Persists a MED-severity
-   * AI_FLAG_CONFIRMED row (Gemini-only — Claude could not be called), uploads
-   * the frame as evidence, fires the admin alert, and increments the strike
-   * counter via PHONE_DETECTED. Returns a MED verdict to the candidate.
+   * Gemini-only strike path for phone-class flags when Claude could not be
+   * called — either Redis is offline OR the Claude slot is on its per-session
+   * cooldown (see `fallbackReason`). Persists a MED-severity AI_FLAG_CONFIRMED
+   * row, uploads the frame as evidence, fires the admin alert, and increments
+   * the strike counter via PHONE_DETECTED. Returns a MED verdict to the
+   * candidate.
    */
   private async handleRedisFallbackPhone(
     session: ExamSession,
@@ -778,6 +796,9 @@ export class AiProctorService {
     frame: Buffer,
     screenFrame: Buffer | null,
     dedupeKey: string,
+    fallbackReason:
+      | 'redis-unavailable+phone-class'
+      | 'claude-rate-limited+phone-class' = 'redis-unavailable+phone-class',
   ): Promise<AiReviewResult> {
     const captionKo = '휴대전화로 의심되는 물체가 감지되었습니다.';
     const captionEn = 'A possible mobile phone has been detected.';
@@ -803,7 +824,7 @@ export class AiProctorService {
           aiConfidence: geminiRes.confidence,
           dedupeKey,
           screenEvidenceUrl,
-          fallbackReason: 'redis-unavailable+phone-class',
+          fallbackReason,
           tier1: {
             confidence: geminiRes.confidence,
             flags: geminiRes.flags,
@@ -834,7 +855,10 @@ export class AiProctorService {
         session.id,
         ProctorEventType.PHONE_DETECTED,
         {
-          origin: 'AI_FALLBACK_REDIS_OFFLINE',
+          origin:
+            fallbackReason === 'claude-rate-limited+phone-class'
+              ? 'AI_FALLBACK_CLAUDE_RATE_LIMITED'
+              : 'AI_FALLBACK_REDIS_OFFLINE',
           aiEventId: event.id,
           flags: geminiRes.flags,
           ts,
@@ -1155,6 +1179,20 @@ export class AiProctorService {
     return this.redis.setNxEx(
       `proctor:claude:rl:${sessionId}`,
       CLAUDE_RL_TTL_SEC,
+    );
+  }
+
+  /**
+   * Gate for Gemini-only PHONE_DETECTED strikes (handleRedisFallbackPhone).
+   * Fail-OPEN when Redis is down: unlike the Claude slot this gate protects
+   * strike pacing, not spend, and the Redis-offline path exists precisely so
+   * visible phone use still strikes without infrastructure.
+   */
+  private async acquirePhoneStrikeSlot(sessionId: string): Promise<boolean> {
+    if (!this.redis.isReady()) return true;
+    return this.redis.setNxEx(
+      `proctor:phone:rl:${sessionId}`,
+      PHONE_STRIKE_RL_TTL_SEC,
     );
   }
 

@@ -490,6 +490,101 @@ describe('AiProctorService.review — Claude-offline fallback', () => {
   });
 });
 
+describe('AiProctorService.review — Claude rate-limited phone fallback', () => {
+  /** setNxEx mock: dedupe always fresh, Claude slot always on cooldown,
+   *  phone-strike slot controlled per test. */
+  const mockSlots = (m: ReturnType<typeof makeMocks>, phoneSlotFree: boolean) => {
+    (m.redis.setNxEx as jest.Mock).mockImplementation(async (key: string) => {
+      if (key.startsWith('proctor:ai:dedupe:')) return true;
+      if (key.startsWith('proctor:claude:rl:')) return false; // on cooldown
+      if (key.startsWith('proctor:phone:rl:')) return phoneSlotFree;
+      return false;
+    });
+  };
+
+  const phoneGemini = (flags: string[]) => ({
+    suspicious: true,
+    confidence: 0.9,
+    flags,
+    notes: '',
+    modelMs: 100,
+    inputTokens: 0,
+    outputTokens: 0,
+    degraded: false,
+  });
+
+  it('Claude slot on cooldown + phone flag → Gemini-only MED + PHONE_DETECTED strike (no more free pass)', async () => {
+    const m = makeMocks();
+    (m.prisma.examSession.findUnique as jest.Mock).mockResolvedValue(makeSession());
+    (m.prisma.userPenalty.findFirst as jest.Mock).mockResolvedValue(null);
+    mockSlots(m, true);
+    (m.gemini.screen as jest.Mock).mockResolvedValue(phoneGemini(['PHONE_IN_FRAME']));
+    const captured: { eventType: string | null; reason: string | null } = { eventType: null, reason: null };
+    (m.prisma.proctoringEvent.create as jest.Mock).mockImplementation(async ({ data }) => {
+      captured.eventType = data.eventType as string;
+      captured.reason = ((data.metadata ?? {}) as Record<string, unknown>).fallbackReason as string ?? null;
+      return { id: 'ev-rl-1', ...data };
+    });
+
+    const svc = makeService(m);
+    const res = await svc.review(USER_ID, { sessionId: SESSION_ID, ts: 200, imageBase64: FRAME_B64 });
+
+    expect(res.aiVerdict).toBe('MED');
+    expect(captured.eventType).toBe(ProctorEventType.AI_FLAG_CONFIRMED);
+    expect(captured.reason).toBe('claude-rate-limited+phone-class');
+    expect((m.claude.verifyAndCaption as jest.Mock).mock.calls.length).toBe(0);
+    const strikeCalls = (m.cbtSessions.recordSystemProctorEvent as jest.Mock).mock.calls;
+    expect(strikeCalls.length).toBe(1);
+    expect(strikeCalls[0][1]).toBe(ProctorEventType.PHONE_DETECTED);
+    expect((strikeCalls[0][2] as Record<string, unknown>).origin).toBe(
+      'AI_FALLBACK_CLAUDE_RATE_LIMITED',
+    );
+  });
+
+  it('phone+gaze co-flagged (looking down at a phone) still strikes — `some`, not `every`', async () => {
+    const m = makeMocks();
+    (m.prisma.examSession.findUnique as jest.Mock).mockResolvedValue(makeSession());
+    (m.prisma.userPenalty.findFirst as jest.Mock).mockResolvedValue(null);
+    mockSlots(m, true);
+    (m.gemini.screen as jest.Mock).mockResolvedValue(
+      phoneGemini(['PHONE_IN_FRAME', 'LOOKING_OFF_SCREEN']),
+    );
+    (m.prisma.proctoringEvent.create as jest.Mock).mockImplementation(async ({ data }) => ({
+      id: 'ev-rl-2', ...data,
+    }));
+
+    const svc = makeService(m);
+    const res = await svc.review(USER_ID, { sessionId: SESSION_ID, ts: 201, imageBase64: FRAME_B64 });
+
+    expect(res.aiVerdict).toBe('MED');
+    const strikeCalls = (m.cbtSessions.recordSystemProctorEvent as jest.Mock).mock.calls;
+    expect(strikeCalls.length).toBe(1);
+    expect(strikeCalls[0][1]).toBe(ProctorEventType.PHONE_DETECTED);
+  });
+
+  it('phone-strike slot also on cooldown → AI_FLAG_SUSPICIOUS only (paced at one strike per TTL)', async () => {
+    const m = makeMocks();
+    (m.prisma.examSession.findUnique as jest.Mock).mockResolvedValue(makeSession());
+    (m.prisma.userPenalty.findFirst as jest.Mock).mockResolvedValue(null);
+    mockSlots(m, false);
+    (m.gemini.screen as jest.Mock).mockResolvedValue(phoneGemini(['PHONE_IN_FRAME']));
+    let lastEventType: string | null = null;
+    (m.prisma.proctoringEvent.create as jest.Mock).mockImplementation(async ({ data }) => {
+      lastEventType = data.eventType as string;
+      return { id: 'ev-rl-3', ...data };
+    });
+    (m.prisma.proctoringEvent.findFirst as jest.Mock).mockResolvedValue(null);
+
+    const svc = makeService(m);
+    const res = await svc.review(USER_ID, { sessionId: SESSION_ID, ts: 202, imageBase64: FRAME_B64 });
+
+    expect(res.aiVerdict).toBe('OK');
+    expect(lastEventType).toBe(ProctorEventType.AI_FLAG_SUSPICIOUS);
+    expect((m.cbtSessions.recordSystemProctorEvent as jest.Mock).mock.calls.length).toBe(0);
+    expect((m.ncp.put as jest.Mock).mock.calls.length).toBe(0);
+  });
+});
+
 describe('AiProctorService.review — Claude-online gaze strike', () => {
   it('Gemini sees LOOKING_OFF_SCREEN AND Claude confirms → AI_FLAG_CONFIRMED + GAZE_AWAY strike', async () => {
     const m = makeMocks();
