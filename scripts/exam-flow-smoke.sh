@@ -24,6 +24,15 @@ PASS=0
 FAIL=0
 FAIL_MSGS=()
 
+# JSON parsing uses node (guaranteed in this repo's dev/CI environments) —
+# python3 doesn't exist on the Windows dev boxes. Paths are always passed to
+# node as argv, never embedded in the -e program text: Git Bash converts
+# POSIX-style paths to Windows form for native binaries, but only in argv.
+SWAGGER_JSON="/tmp/axis-smoke-swagger.json"
+PAPER_JSON="/tmp/axis-smoke-paper.json"
+GRADE_JSON="/tmp/axis-smoke-grade.json"
+REFRESH_JSON="/tmp/axis-smoke-refresh.json"
+
 ok()   { printf '  [PASS] %s\n' "$1"; PASS=$((PASS+1)); }
 bad()  { printf '  [FAIL] %s\n' "$1"; FAIL=$((FAIL+1)); FAIL_MSGS+=("$1"); }
 
@@ -31,8 +40,8 @@ section() { printf '\n=== %s ===\n' "$1"; }
 
 # ─── 1. Backend health ───────────────────────────────────────────────────────
 section "1. Backend health"
-code=$(curl -sS -o /tmp/swagger.json -w '%{http_code}' "$API/api-docs-json")
-if [[ "$code" == "200" ]] && python3 -c "import json; json.load(open('/tmp/swagger.json'))" 2>/dev/null; then
+code=$(curl -sS -o "$SWAGGER_JSON" -w '%{http_code}' "$API/api-docs-json")
+if [[ "$code" == "200" ]] && node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" "$SWAGGER_JSON" 2>/dev/null; then
   ok "Backend reachable, Swagger spec valid JSON"
 else
   bad "Swagger spec missing or invalid (HTTP $code)"
@@ -64,12 +73,16 @@ required=(
 for entry in "${required[@]}"; do
   method=$(echo "$entry" | awk '{print tolower($1)}')
   route=$(echo "$entry" | awk '{print $2}')
-  if python3 -c "
-import json, sys
-spec = json.load(open('/tmp/swagger.json'))
-m, r = sys.argv[1], sys.argv[2]
-sys.exit(0 if r in spec.get('paths', {}) and m in spec['paths'][r] else 1)
-" "$method" "$route" 2>/dev/null; then
+  # The route is passed WITHOUT its leading slash and re-prepended inside
+  # node — Git Bash rewrites any argv or env value that looks like an
+  # absolute POSIX path (e.g. /auth/login → C:/Program Files/Git/auth/login)
+  # when spawning native binaries; relative-looking strings pass untouched.
+  if node -e "
+const spec = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+const m = process.argv[2];
+const r = '/' + process.argv[3];
+process.exit(spec.paths && spec.paths[r] && spec.paths[r][m] ? 0 : 1);
+" "$SWAGGER_JSON" "$method" "${route#/}" 2>/dev/null; then
     ok "$entry"
   else
     bad "$entry — NOT mounted"
@@ -101,7 +114,7 @@ done
 
 # ─── 4. /auth/refresh rejects bogus token (no infinite loop) ─────────────────
 section "4. /auth/refresh hardening"
-code=$(curl -sS -o /tmp/refresh.json -w '%{http_code}' \
+code=$(curl -sS -o "$REFRESH_JSON" -w '%{http_code}' \
   -H "Content-Type: application/json" \
   -X POST "$API/auth/refresh" \
   -d '{"refreshToken":"this-is-not-a-jwt"}')
@@ -115,32 +128,35 @@ fi
 section "5+6. Demo paper + grade for all (certType, level) combos"
 for cert in AXIS AXIS_C AXIS_H; do
   for level in L3 L2 L1; do
-    paper_code=$(curl -sS -o /tmp/paper.json -w '%{http_code}' "$API/cbt/demo/$cert/$level")
+    paper_code=$(curl -sS -o "$PAPER_JSON" -w '%{http_code}' "$API/cbt/demo/$cert/$level")
     if [[ "$paper_code" != "200" ]]; then
       bad "GET /cbt/demo/$cert/$level -> $paper_code"
       continue
     fi
-    n=$(python3 -c "import json; print(len(json.load(open('/tmp/paper.json')).get('questions',[])))")
+    n=$(node -e "
+const p = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+console.log((p.questions || []).length);
+" "$PAPER_JSON" 2>/dev/null || echo 0)
     if [[ "$n" -lt 1 ]]; then
       bad "$cert $level demo paper has 0 questions (question bank may be empty)"
       continue
     fi
     ok "GET /cbt/demo/$cert/$level -> $n questions"
 
-    body=$(python3 - "$cert" "$level" <<'PY'
-import json, sys
-cert, level = sys.argv[1], sys.argv[2]
-p = json.load(open('/tmp/paper.json'))
-answers = [{"questionId": q["id"], "selectedChoice": "A"} for q in p["questions"]]
-print(json.dumps({"certType": cert, "level": level, "answers": answers}))
-PY
-)
-    grade_code=$(curl -sS -o /tmp/grade.json -w '%{http_code}' \
+    body=$(node -e "
+const p = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+const answers = p.questions.map((q) => ({ questionId: q.id, selectedChoice: 'A' }));
+console.log(JSON.stringify({ certType: process.argv[2], level: process.argv[3], answers }));
+" "$PAPER_JSON" "$cert" "$level")
+    grade_code=$(curl -sS -o "$GRADE_JSON" -w '%{http_code}' \
       -H "Content-Type: application/json" \
       -X POST "$API/cbt/demo/grade" \
       -d "$body")
     if [[ "$grade_code" == "200" ]] || [[ "$grade_code" == "201" ]]; then
-      score=$(python3 -c "import json; r=json.load(open('/tmp/grade.json')); print(r.get('score', r))")
+      score=$(node -e "
+const r = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+console.log(r.score !== undefined ? r.score : JSON.stringify(r));
+" "$GRADE_JSON")
       ok "POST /cbt/demo/grade ($cert $level) -> $grade_code (score=$score)"
     else
       bad "POST /cbt/demo/grade ($cert $level) -> $grade_code"
