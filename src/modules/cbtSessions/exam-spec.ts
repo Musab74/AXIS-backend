@@ -147,6 +147,21 @@ export function getScoring(_certType: CertType, level: CertLevel): LevelScoring 
   return LEVEL_SCORING[level];
 }
 
+/**
+ * Section floor (%) for one exam part at (certType, level) — null when the
+ * section has no floor or the part isn't in the level's scoring model. Used by
+ * the AI-prescore review triggers (a task near/below its section floor is
+ * routed to mandatory expert review).
+ */
+export function getSectionFloorPct(
+  certType: CertType,
+  level: CertLevel,
+  part: ExamPart,
+): number | null {
+  const section = getScoring(certType, level).sections.find((s) => s.part === part);
+  return section?.floorPct ?? null;
+}
+
 export interface WeightedResult {
   /** 0–100 weighted total, rounded. */
   total: number;

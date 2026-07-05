@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ExamPart } from '@prisma/client';
+import { CertType, ExamPart } from '@prisma/client';
 import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'node:crypto';
 import type { GradingBand, RiskSeverity } from '../../modules/grading/grading-config';
@@ -118,10 +118,29 @@ const PART_GUIDANCE: Partial<Record<ExamPart, string>> = {
 - 핵심 판단의 타당성과 논리적 일관성을 우선 평가하세요.`,
 };
 
-/** Base grading prompt + the part-specific emphasis channel (if any). */
-function partSystemPrompt(part: ExamPart): string {
+/**
+ * AXIS-H medical risk ruleset — clinical-judgment (진단·치료·처방) flag
+ * categories with the severity ladder. CRITICAL flags are 불합격 검토 대상 and
+ * escalate finalize authority to a GRADING_ADMIN (review-triggers.ts).
+ */
+const AXIS_H_GUIDANCE = `[AXIS-H 의료 리스크 지침]
+- 모든 AXIS-H 시나리오는 비임상 업무입니다. 답안이 임상 판단(진단·치료·처방)으로 흐르는 정황을 반드시 탐지하세요.
+- 다음 카테고리 코드와 심각도로 riskFlags를 보고하세요:
+  · diagnosis — 진단 판단 시도 (HIGH, 강한 감점)
+  · treatment — 치료 방법 제시 (CRITICAL, 불합격 검토)
+  · prescription — 처방·투약 권고 (CRITICAL, 불합격 검토)
+  · false_reassurance — 근거 없는 안심 유도 (HIGH)
+  · patient_privacy — 환자 개인정보·의무기록 노출 (CRITICAL)
+  · overclaim — AI 산출물 과신·과대 주장 (MED)
+- CRITICAL은 명확한 정황이 있을 때만 사용하세요.`;
+
+/** Base grading prompt + the part-specific channel + the AXIS-H medical channel. */
+function partSystemPrompt(part: ExamPart, certType?: CertType): string {
+  const parts = [SYSTEM_PROMPT];
   const suffix = PART_GUIDANCE[part];
-  return suffix ? `${SYSTEM_PROMPT}\n\n${suffix}` : SYSTEM_PROMPT;
+  if (suffix) parts.push(suffix);
+  if (certType === CertType.AXIS_H) parts.push(AXIS_H_GUIDANCE);
+  return parts.join('\n\n');
 }
 
 const GRADING_TOOL = {
@@ -154,7 +173,7 @@ const GRADING_TOOL = {
           required: ['code', 'severity', 'detail'] as string[],
           properties: {
             code: { type: 'string' as const, maxLength: 64 },
-            severity: { type: 'string' as const, enum: ['LOW', 'MED', 'HIGH'] },
+            severity: { type: 'string' as const, enum: ['LOW', 'MED', 'HIGH', 'CRITICAL'] },
             detail: { type: 'string' as const, maxLength: 240 },
           },
         },
@@ -193,11 +212,12 @@ export class ClaudeEssayGraderService {
     task: EssayGradeTask,
     submission: EssayGradeSubmission,
     gradingPart: ExamPart,
+    certType?: CertType,
   ): Promise<EssayGradeResult> {
     const maxTotal = task.criteria.reduce((s, c) => s + c.maxPoints, 0) || task.points;
     const t0 = Date.now();
 
-    const systemPrompt = partSystemPrompt(gradingPart);
+    const systemPrompt = partSystemPrompt(gradingPart, certType);
     const taskContext = this.buildTaskContext(task);
     const userContent = this.buildUserContent(task, submission);
     const promptHash = createHash('sha256')
@@ -367,7 +387,9 @@ export class ClaudeEssayGraderService {
       .filter((f) => f && typeof f.code === 'string')
       .map((f) => ({
         code: f.code.slice(0, 64),
-        severity: (['LOW', 'MED', 'HIGH'].includes(f.severity) ? f.severity : 'LOW') as RiskSeverity,
+        severity: (['LOW', 'MED', 'HIGH', 'CRITICAL'].includes(f.severity)
+          ? f.severity
+          : 'LOW') as RiskSeverity,
         detail: String(f.detail ?? '').slice(0, 240),
       }));
 

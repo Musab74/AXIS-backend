@@ -6,6 +6,12 @@ export interface L3RubricPayload {
   answerKey: Record<string, unknown> | null;
   criteria: RubricCriterion[];
   responseFormat: Record<string, unknown> | null;
+  /**
+   * Item-author expert-review conditions (free-form Korean from the source
+   * YAML). Not machine-interpretable — surfaced to the reviewer UI and kept
+   * alongside the generic runtime triggers in assessRisk.
+   */
+  expertReviewTrigger: unknown;
 }
 
 /** A candidate's structured L3 answer, decoded from EssayAnswer.contentText JSON. */

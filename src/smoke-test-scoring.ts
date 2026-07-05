@@ -173,20 +173,28 @@ section('Weighted pass/fail (computeWeightedResult)');
 }
 
 // ── 5. Expert queue scoping ─────────────────────────────────────────────────
+// Competency-scoped experts (EXPERT_CERT_SCOPES) see only their series; an
+// expert with NO declared competency keeps full access (safe unset default).
 section('Expert queue scoping (resolveAllowedCertTypes)');
 {
   check('SUPER_ADMIN → null (all)', resolveAllowedCertTypes(['SUPER_ADMIN'], []) === null);
   check('GRADING_ADMIN → null (all)', resolveAllowedCertTypes(['GRADING_ADMIN'], []) === null);
   const coding = resolveAllowedCertTypes(['EXPERT'], [CertType.AXIS_C]);
   check(
-    'EXPERT → null (all series)',
-    coding === null,
+    'EXPERT with AXIS_C competency → [AXIS_C] only',
+    coding !== null && coding.length === 1 && coding[0] === CertType.AXIS_C,
     JSON.stringify(coding),
   );
   const health = resolveAllowedCertTypes(['EXPERT'], [CertType.AXIS_H]);
-  check('EXPERT with AXIS_H competency → still all series', health === null);
+  check(
+    'EXPERT with AXIS_H competency → [AXIS_H] only',
+    health !== null && health.length === 1 && health[0] === CertType.AXIS_H,
+    JSON.stringify(health),
+  );
   const none = resolveAllowedCertTypes(['EXPERT'], []);
-  check('EXPERT with no competency → still all series', none === null);
+  check('EXPERT with no declared competency → all series (unset default)', none === null);
+  const other = resolveAllowedCertTypes(['EXAMINEE'], []);
+  check('non-grading role → [] (sees nothing)', other !== null && other.length === 0);
   // Admin role wins even if EXPERT is also present.
   check(
     'EXPERT+GRADING_ADMIN → null (admin wins)',

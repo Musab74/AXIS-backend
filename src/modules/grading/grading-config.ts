@@ -20,9 +20,9 @@ export const GRADING_CONFIG = {
   CONFIDENCE_FLOOR: 0.75,
 
   /**
-   * |expertScore − aiPreScore| in points beyond which a task is treated as
-   * disputed (drives the `expert_disputed` queue state). Matches the value the
-   * queue already used inline before this module existed.
+   * Gap between the expert's score and the AI pre-score — both normalized to a
+   * 0–100 percentage of the task's max points — at or beyond which a task is
+   * treated as disputed (drives the `expert_disputed` queue state).
    */
   DISPUTE_DELTA_POINTS: 15,
 
@@ -44,8 +44,20 @@ export const GRADING_CONFIG = {
 
   /** Minimum number of independent expert ratings required to calibrate a task. */
   CALIBRATION_MIN_EXPERTS: 2,
+
+  /**
+   * Per-task hard review floor (%): any practical/essay task scored below this
+   * percentage goes to mandatory expert review regardless of the AI's
+   * band/confidence self-report. Applies at every level.
+   */
+  TASK_REVIEW_FLOOR_PCT: 40,
 } as const;
 
-export type RiskSeverity = 'LOW' | 'MED' | 'HIGH';
+/**
+ * CRITICAL is reserved for the AXIS-H medical ruleset (치료·처방·환자정보 —
+ * 불합격 검토 대상). Any HIGH or CRITICAL flag escalates finalize to a
+ * GRADING_ADMIN (see review-triggers.ts).
+ */
+export type RiskSeverity = 'LOW' | 'MED' | 'HIGH' | 'CRITICAL';
 
 export type GradingBand = 'excellent' | 'normal' | 'borderline' | 'fail';

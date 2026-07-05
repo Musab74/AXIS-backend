@@ -16,6 +16,9 @@ import { CbtSessionsService } from '../cbtSessions/cbt-sessions.service';
 import { FinalizeSessionDto } from './dto/finalize-session.dto';
 import { ExpertScoreDto } from './dto/expert-score.dto';
 import { GRADING_CONFIG } from './grading-config';
+import { parseExpertCertScopes } from './expert-scopes';
+import { parseL3Reference } from './rubric';
+import { anyAnswerEscalated, isScoreDisputed } from './review-triggers';
 import {
   attachmentFileNameFromKey,
   encodeDeliverableReview,
@@ -44,19 +47,22 @@ export interface GradingViewer {
 /**
  * Pure decision for which series a viewer may see in the grading queue.
  *   - Admins (SUPER_ADMIN / GRADING_ADMIN / EXAM_ADMIN) → `null` (no filter).
- *   - EXPERT → `null` (all series — any expert may grade AXIS / AXIS-C / AXIS-H).
+ *   - EXPERT with declared competencies → exactly those series.
+ *   - EXPERT with NO declared competencies → `null` (all series — the legacy
+ *     behavior, kept as the default so an unconfigured deployment never locks
+ *     graders out; competencies come from EXPERT_CERT_SCOPES, see expert-scopes.ts).
  *   - anyone else → `[]` (sees nothing).
  * Extracted so it can be unit/smoke-tested without a DB.
  */
 export function resolveAllowedCertTypes(
   roles: string[],
-  _competencies: CertType[],
+  competencies: CertType[],
 ): CertType[] | null {
   const isAdmin = roles.some(
     (r) => r === 'SUPER_ADMIN' || r === 'GRADING_ADMIN' || r === 'EXAM_ADMIN',
   );
   if (isAdmin) return null;
-  if (roles.includes('EXPERT')) return null;
+  if (roles.includes('EXPERT')) return competencies.length > 0 ? competencies : null;
   return [];
 }
 
@@ -107,10 +113,27 @@ export class AdminGradingService {
     private readonly config: ConfigService,
   ) {}
 
-  /** Grading queue scope — `null` means all cert series (admins + experts). */
+  /** Grading queue scope — `null` means all cert series (admins + unscoped experts). */
   private async allowedCertTypes(viewer?: GradingViewer): Promise<CertType[] | null> {
     if (!viewer) return null;
-    return resolveAllowedCertTypes(viewer.roles, []);
+    const scopes = parseExpertCertScopes(
+      this.config.get<string>('grading.expertCertScopes') ?? process.env.EXPERT_CERT_SCOPES,
+    );
+    return resolveAllowedCertTypes(viewer.roles, scopes.get(viewer.id) ?? []);
+  }
+
+  /** Throws when a non-admin actor's competency scope excludes the session's series. */
+  private async assertWithinCertScope(
+    actorId: string,
+    actorRoles: string[],
+    certType: CertType,
+  ): Promise<void> {
+    const allowed = await this.allowedCertTypes({ id: actorId, roles: actorRoles });
+    if (allowed && !allowed.includes(certType)) {
+      throw new ForbiddenException(
+        'This session is outside your grading scope (cert series competency).',
+      );
+    }
   }
 
   async listQueue(
@@ -130,10 +153,23 @@ export class AdminGradingService {
       },
       include: {
         user: { select: { name: true } },
-        essayAnswers: { select: { aiPreScore: true, expertScore: true } },
+        essayAnswers: { select: { taskId: true, aiPreScore: true, expertScore: true } },
       },
       orderBy: [{ submittedAt: 'desc' }],
     });
+
+    // Task max points, needed to put the expert's raw score and the AI's
+    // percentage pre-score on the same 0–100 scale for the dispute check.
+    const queueTaskIds = Array.from(
+      new Set(sessions.flatMap((s) => s.essayAnswers.map((e) => e.taskId))),
+    );
+    const queueTasks = queueTaskIds.length
+      ? await this.prisma.taskTemplate.findMany({
+          where: { id: { in: queueTaskIds } },
+          select: { id: true, points: true },
+        })
+      : [];
+    const pointsByTask = new Map(queueTasks.map((t) => [t.id, t.points]));
 
     const regIds = sessions.map((s) => s.registrationId).filter((r): r is string => !!r);
     const registrations = regIds.length
@@ -161,7 +197,7 @@ export class AdminGradingService {
       const due = new Date((s.submittedAt ?? s.updatedAt).getTime() + GRADING_SLA_DAYS * 86_400_000);
       const overdue = now > due.getTime() && s.status !== ExamSessionStatus.GRADED;
       const reg = s.registrationId ? regById.get(s.registrationId) : null;
-      const practicalState = this.derivePracticalState(s);
+      const practicalState = this.derivePracticalState(s, pointsByTask);
       return {
         sessionId: s.id,
         candidate: s.user.name,
@@ -408,6 +444,9 @@ export class AdminGradingService {
           maxPoints: t?.points ?? 0,
           rubric: t?.rubric ?? null,
           modelAnswer: t?.modelAnswer ?? null,
+          // Item-author review conditions from the L3 seed (rubric JSON) —
+          // shown to the reviewer alongside the generic runtime triggers.
+          expertReviewTrigger: parseL3Reference(t?.rubric ?? null)?.expertReviewTrigger ?? null,
           contentText: a.contentText,
           hasAttachment,
           attachmentFileName: attachmentFileNameFromKey(a.attachmentUrl),
@@ -504,6 +543,7 @@ export class AdminGradingService {
     const isAdmin = actorRoles.some((r) =>
       r === 'SUPER_ADMIN' || r === 'GRADING_ADMIN' || r === 'EXAM_ADMIN',
     );
+    await this.assertWithinCertScope(actorId, actorRoles, session.certType);
     const effectiveAssignee = await this.claimSessionIfUnassigned(
       session.id,
       session.level,
@@ -589,10 +629,15 @@ export class AdminGradingService {
         }
       }
 
-      // Clear mandatoryReview once all essay answers for this session have an expert score.
+      // Clear mandatoryReview once all essay answers for this session have an
+      // expert score — EXCEPT for an AXIS-H session carrying a HIGH/CRITICAL
+      // medical risk flag: that stays in mandatory review until a GRADING_ADMIN
+      // finalizes (severity ladder — 불합격 검토).
       const allAnswers = await tx.essayAnswer.findMany({ where: { sessionId } });
       const allScored = allAnswers.length > 0 && allAnswers.every((a) => a.expertScore != null);
-      if (allScored && session.mandatoryReview) {
+      const escalated =
+        session.certType === CertType.AXIS_H && anyAnswerEscalated(allAnswers);
+      if (allScored && session.mandatoryReview && !escalated) {
         await tx.examSession.update({
           where: { id: sessionId },
           data: { mandatoryReview: false },
@@ -606,7 +651,9 @@ export class AdminGradingService {
 
     const allAnswers = await this.prisma.essayAnswer.findMany({ where: { sessionId } });
     const mandatoryReviewCleared =
-      session.mandatoryReview && allAnswers.every((a) => a.expertScore != null);
+      session.mandatoryReview &&
+      allAnswers.every((a) => a.expertScore != null) &&
+      !(session.certType === CertType.AXIS_H && anyAnswerEscalated(allAnswers));
 
     return {
       ok: true,
@@ -658,6 +705,25 @@ export class AdminGradingService {
     const isAdmin = actorRoles.some((r) =>
       r === 'SUPER_ADMIN' || r === 'GRADING_ADMIN' || r === 'EXAM_ADMIN',
     );
+    await this.assertWithinCertScope(actorId, actorRoles, session.certType);
+
+    // ── Guardrail 0a (AXIS-H): severity-ladder escalation ───────────────────
+    // A HIGH/CRITICAL medical risk flag (진단·치료·처방·환자정보) is 불합격 검토
+    // territory: only a GRADING_ADMIN (or SUPER_ADMIN) may finalize — not the
+    // assigned expert, and not an EXAM_ADMIN.
+    const isGradingAdmin = actorRoles.some(
+      (r) => r === 'SUPER_ADMIN' || r === 'GRADING_ADMIN',
+    );
+    if (
+      session.certType === CertType.AXIS_H &&
+      !isGradingAdmin &&
+      anyAnswerEscalated(session.essayAnswers)
+    ) {
+      throw new ForbiddenException(
+        'This AXIS-H session carries a HIGH/CRITICAL medical risk flag (불합격 검토). ' +
+          'Only a GRADING_ADMIN may finalize it.',
+      );
+    }
 
     // ── Guardrail 0 (L3): auto-finalize territory ────────────────────────────
     // L3-with-practicals auto-finalizes on submit when the AI is confident
@@ -984,12 +1050,15 @@ export class AdminGradingService {
     };
   }
 
-  private derivePracticalState(s: {
-    level: CertLevel;
-    status: ExamSessionStatus;
-    mandatoryReview: boolean;
-    essayAnswers: { aiPreScore: number | null; expertScore: number | null }[];
-  }): PracticalState {
+  private derivePracticalState(
+    s: {
+      level: CertLevel;
+      status: ExamSessionStatus;
+      mandatoryReview: boolean;
+      essayAnswers: { taskId: string; aiPreScore: number | null; expertScore: number | null }[];
+    },
+    pointsByTask: ReadonlyMap<string, number>,
+  ): PracticalState {
     // No practical section (legacy MCQ-only L3) → auto-graded at submit.
     // L3-with-practicals has essay rows and flows through the AI/expert states.
     if (s.essayAnswers.length === 0) {
@@ -998,11 +1067,9 @@ export class AdminGradingService {
     const anyAi = s.essayAnswers.some((e) => e.aiPreScore != null);
     const anyExpert = s.essayAnswers.some((e) => e.expertScore != null);
     const allExpert = s.essayAnswers.every((e) => e.expertScore != null);
-    const disputed = s.essayAnswers.some(
-      (e) =>
-        e.aiPreScore != null &&
-        e.expertScore != null &&
-        Math.abs(e.expertScore - e.aiPreScore) > GRADING_CONFIG.DISPUTE_DELTA_POINTS,
+    // Expert raw points vs AI percentage — normalized inside isScoreDisputed.
+    const disputed = s.essayAnswers.some((e) =>
+      isScoreDisputed(e.expertScore, e.aiPreScore, pointsByTask.get(e.taskId)),
     );
     // GRADED is terminal. L3 can reach GRADED via auto-finalize WITHOUT expert
     // scores (AI-confident), so don't require allExpert for L3.
@@ -1020,6 +1087,6 @@ export class AdminGradingService {
 export type _AdminGradingPrismaShape = Prisma.ExamSessionGetPayload<{
   include: {
     user: { select: { name: true } };
-    essayAnswers: { select: { aiPreScore: true; expertScore: true } };
+    essayAnswers: { select: { taskId: true; aiPreScore: true; expertScore: true } };
   };
 }>;

@@ -48,6 +48,7 @@ export function parseL3RubricPayload(rubric: unknown): L3RubricPayload {
     answerKey: asRecord(wrapper.answerKey),
     criteria: parseRubric(rubric, deriveMaxPoints(rubric)),
     responseFormat: asRecord(wrapper.responseFormat),
+    expertReviewTrigger: wrapper.expertReviewTrigger ?? null,
   };
 }
 

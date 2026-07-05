@@ -118,5 +118,17 @@ export const envConfig = () => ({
     // Environments without the seeded L3 practical pool fall back to legacy
     // MCQ-only automatically. Set 'false' to force the legacy MCQ-only spec.
     l3PracticalsEnabled: (process.env.L3_PRACTICALS_ENABLED || 'true').toLowerCase() === 'true',
+    // POLICY FLAG: L3-with-practicals auto-finalize (AI-confident sessions are
+    // GRADED + certified with no human touch). Default ON = current behavior;
+    // set 'false' to force every L3 practical session through the expert queue.
+    // Read at call time in L3AutoFinalizeService (this entry documents it).
+    l3AutoFinalize: (process.env.L3_AUTO_FINALIZE || 'true').toLowerCase() === 'true',
+  },
+
+  grading: {
+    // Per-expert cert-series competency allowlist:
+    //   EXPERT_CERT_SCOPES="<userId>=AXIS,AXIS_H;<userId2>=AXIS_C"
+    // Unset → every expert keeps full-series access (legacy behavior).
+    expertCertScopes: (process.env.EXPERT_CERT_SCOPES || '').trim(),
   },
 });

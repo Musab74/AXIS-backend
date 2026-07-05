@@ -1,8 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CertType, ExamPart, TaskTemplate } from '@prisma/client';
 import { Judge0Service } from '../../integrations/judge0/judge0.service';
-import type { EssayGradeResult } from '../../integrations/anthropic/claude-essay-grader.service';
+import type {
+  EssayGradeResult,
+  EssayGradeRiskFlag,
+} from '../../integrations/anthropic/claude-essay-grader.service';
 import type { GradingBand } from './grading-config';
+import { scanForbiddenPatterns } from './forbidden-patterns';
 
 interface CodeTestCase {
   stdin: string;
@@ -38,6 +42,15 @@ export class CodeGradingService {
   isCodeTask(tpl: TaskTemplate): boolean {
     if (tpl.certType !== CertType.AXIS_C || tpl.part !== ExamPart.PRACTICAL) return false;
     return this.readTestCases(tpl).length > 0;
+  }
+
+  /**
+   * True when Judge0 execution is available on this server. A code task that
+   * cannot be executed must NEVER silently pass — the dispatcher forces
+   * mandatory review when this is false (see EssayGradingService).
+   */
+  isJudge0Configured(): boolean {
+    return this.judge0.isConfigured();
   }
 
   private readTestCases(tpl: TaskTemplate): CodeTestCase[] {
@@ -86,8 +99,23 @@ export class CodeGradingService {
     const allPassed = passed === total;
     const band: GradingBand = allPassed ? 'excellent' : pct >= 60 ? 'normal' : pct > 0 ? 'borderline' : 'fail';
 
+    // Static forbidden-pattern scan runs alongside execution; a hit routes the
+    // session to mandatory review even when every test passes.
+    const staticFlags = scanForbiddenPatterns(code);
+    const testFlags: EssayGradeRiskFlag[] = allPassed
+      ? []
+      : [{ code: 'code_tests_failed', severity: 'MED', detail: `${passed}/${total} 테스트 통과` }];
+
     this.logger.log(
-      JSON.stringify({ msg: 'code_autograde', taskId: tpl.id, languageId, passed, total, pct }),
+      JSON.stringify({
+        msg: 'code_autograde',
+        taskId: tpl.id,
+        languageId,
+        passed,
+        total,
+        pct,
+        forbiddenPatterns: staticFlags.length,
+      }),
     );
 
     return {
@@ -99,9 +127,7 @@ export class CodeGradingService {
       pct,
       band,
       // A mismatch (not all tests pass) must be seen by an expert per spec.
-      riskFlags: allPassed
-        ? []
-        : [{ code: 'code_tests_failed', severity: 'MED', detail: `${passed}/${total} 테스트 통과` }],
+      riskFlags: [...staticFlags, ...testFlags],
       // Deterministic execution — high confidence in the pass/fail counts, but
       // never a 1.0 (the expert still judges code quality / partial credit).
       confidence: allPassed ? 0.95 : 0.7,

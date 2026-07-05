@@ -4,13 +4,17 @@ import { PrismaService } from '../../common/prisma.service';
 import {
   ClaudeEssayGraderService,
   EssayGradeResult,
+  EssayGradeRiskFlag,
   EssayGradeTask,
 } from '../../integrations/anthropic/claude-essay-grader.service';
+import { getScoring, getSectionFloorPct } from '../cbtSessions/exam-spec';
 import { parseRubric, parseL3Reference, RubricCriterion } from './rubric';
 import { GRADING_CONFIG } from './grading-config';
 import { CodeGradingService } from './code-grading.service';
+import { scanForbiddenPatterns } from './forbidden-patterns';
 import { L3PracticalGraderService, parseL3Submission } from './l3-practical-grader.service';
 import type { L3GradeResult, L3Submission } from './l3-practical-grader.types';
+import { computeMandatoryReview, sessionReviewFromTaskPcts } from './review-triggers';
 import {
   EssayGradePersist,
   GradingStrategyName,
@@ -32,9 +36,11 @@ export interface AiPrescoreTaskOutcome {
   riskFlags?: number;
 }
 
-/** Internal outcome carrying the L3 review flag; stripped from the public summary. */
+/** Internal outcome carrying review-trigger context; stripped from the public summary. */
 interface GradedOutcome extends AiPrescoreTaskOutcome {
   forceReview?: boolean;
+  /** Section floor (%) for the task's part — feeds the numeric review triggers. */
+  floorPct?: number | null;
 }
 
 export interface AiPrescoreSummary {
@@ -118,7 +124,8 @@ export class EssayGradingService {
       outcomes.push(await this.gradeAnswer(session, tpl, ans));
     }
 
-    const mandatoryReview = this.computeMandatoryReview(outcomes);
+    const mandatoryReview =
+      computeMandatoryReview(outcomes) || this.sessionLevelReview(session, tasks, outcomes);
     await this.prisma.examSession.update({ where: { id: sessionId }, data: { mandatoryReview } });
 
     this.logger.log(
@@ -131,7 +138,31 @@ export class EssayGradingService {
       }),
     );
 
-    return { sessionId, configured, tasks: outcomes.map(({ forceReview: _f, ...o }) => o) };
+    return {
+      sessionId,
+      configured,
+      tasks: outcomes.map(({ forceReview: _f, floorPct: _fl, ...o }) => o),
+    };
+  }
+
+  /**
+   * Session-level numeric triggers (total within the pass boundary band, or a
+   * practical section near/below its floor). Only evaluable once every task
+   * carries an AI pct; per-task triggers still apply on partial prescores.
+   */
+  private sessionLevelReview(
+    session: SessionWithAnswers,
+    tasks: TaskTemplate[],
+    outcomes: GradedOutcome[],
+  ): boolean {
+    if (outcomes.length === 0 || outcomes.some((o) => !o.scored || o.pct == null)) return false;
+    const pctByTask = new Map(outcomes.map((o) => [o.taskId, o.pct ?? 0]));
+    return sessionReviewFromTaskPcts(
+      getScoring(session.certType, session.level),
+      session.writtenScore ?? 0,
+      tasks,
+      pctByTask,
+    );
   }
 
   /** Route one answer to the right grader per session level + task part. */
@@ -163,8 +194,29 @@ export class EssayGradingService {
       if (codeResult) {
         await this.persistResult(ans, claudeToPersist(codeResult));
         this.logGraded('code_autograde', tpl.id, session.id);
-        return this.outcomeFromResult(tpl, codeResult, false);
+        return this.outcomeFromResult(session, tpl, codeResult, false);
       }
+      // Judge0 could not execute this code task — NEVER silent-pass. Fall back
+      // to Claude with the static forbidden-pattern flags attached and force
+      // expert review so an unexecuted code submission is always human-checked.
+      if (!this.codeGrading.isJudge0Configured()) {
+        this.logger.warn(
+          JSON.stringify({
+            msg: 'judge0_unconfigured_code_task_forced_review',
+            sessionId: session.id,
+            taskId: tpl.id,
+          }),
+        );
+      }
+      const outcome = await this.gradeWithClaude(
+        session,
+        tpl,
+        ans,
+        plan.includeChatLog,
+        plan.includeExecutionSummary,
+        scanForbiddenPatterns(ans.contentText),
+      );
+      return { ...outcome, forceReview: true };
     }
 
     return this.gradeWithClaude(session, tpl, ans, plan.includeChatLog, plan.includeExecutionSummary);
@@ -204,6 +256,7 @@ export class EssayGradingService {
       pct: final.pct,
       riskFlags: final.riskFlags.length,
       forceReview: final.needsExpertReview || rationaleLowConf,
+      floorPct: getSectionFloorPct(session.certType, session.level, tpl.part),
     };
   }
 
@@ -224,7 +277,12 @@ export class EssayGradingService {
         `${base.scenario}\n\n[안내] 객관식/체크리스트 항목은 이미 자동 채점되었습니다. ` +
         `아래 루브릭의 근거(서술) 기준만 채점하세요.\n${objectiveContext(l3)}`,
     };
-    return this.grader.grade(focused, { contentText: ans.contentText, aiChatLog: ans.aiChatLog }, tpl.part);
+    return this.grader.grade(
+      focused,
+      { contentText: ans.contentText, aiChatLog: ans.aiChatLog },
+      tpl.part,
+      tpl.certType,
+    );
   }
 
   private async gradeWithClaude(
@@ -233,11 +291,12 @@ export class EssayGradingService {
     ans: EssayAnswer,
     includeChatLog: boolean,
     includeExecutionSummary: boolean,
+    extraRiskFlags: EssayGradeRiskFlag[] = [],
   ): Promise<GradedOutcome> {
     const executionSummary = includeExecutionSummary
       ? buildCodeExecutionSummary(session, tpl.id, ans.contentText)
       : null;
-    const result = await this.grader.grade(
+    const raw = await this.grader.grade(
       EssayGradingService.toGradeTask(tpl),
       {
         contentText: ans.contentText,
@@ -245,29 +304,24 @@ export class EssayGradingService {
         executionSummary,
       },
       tpl.part,
+      tpl.certType,
     );
-    if (result.degraded) return { taskId: tpl.id, title: tpl.title, scored: false };
+    if (raw.degraded) return { taskId: tpl.id, title: tpl.title, scored: false };
 
+    const result: EssayGradeResult = extraRiskFlags.length
+      ? { ...raw, riskFlags: [...extraRiskFlags, ...raw.riskFlags] }
+      : raw;
     await this.persistResult(ans, claudeToPersist(result));
     this.logGraded('claude_rubric', tpl.id, session.id);
-    return this.outcomeFromResult(tpl, result, false);
+    return this.outcomeFromResult(session, tpl, result, false);
   }
 
-  private computeMandatoryReview(outcomes: GradedOutcome[]): boolean {
-    // L3 tasks decide via forceReview (grader needsExpertReview OR low Claude
-    // rationale confidence); L2/L1 keep the original band/confidence/risk logic.
-    return outcomes.some(
-      (o) =>
-        o.scored &&
-        (o.forceReview === true ||
-          (o.confidence != null && o.confidence < GRADING_CONFIG.CONFIDENCE_FLOOR) ||
-          (o.riskFlags ?? 0) > 0 ||
-          o.band === 'borderline' ||
-          o.band === 'fail'),
-    );
-  }
-
-  private outcomeFromResult(tpl: TaskTemplate, result: EssayGradeResult, forceReview: boolean): GradedOutcome {
+  private outcomeFromResult(
+    session: SessionWithAnswers,
+    tpl: TaskTemplate,
+    result: EssayGradeResult,
+    forceReview: boolean,
+  ): GradedOutcome {
     return {
       taskId: tpl.id,
       title: tpl.title,
@@ -277,6 +331,7 @@ export class EssayGradingService {
       confidence: result.confidence,
       riskFlags: result.riskFlags.length,
       forceReview,
+      floorPct: getSectionFloorPct(session.certType, session.level, tpl.part),
     };
   }
 

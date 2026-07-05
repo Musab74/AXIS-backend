@@ -11,6 +11,19 @@ type SessionWithEssays = Prisma.ExamSessionGetPayload<{ include: { essayAnswers:
 const PRESCORE_TIMEOUT_MS = 10_000;
 
 /**
+ * POLICY FLAG — L3-with-practicals auto-finalize issues pass/fail and
+ * certificates with no human touch when the AI first pass is confident
+ * (mandatoryReview=false), which is an explicit exception to the "AI is not
+ * the final grader" principle. Default 'true' preserves the current production
+ * behavior; set L3_AUTO_FINALIZE=false to route every L3-with-practicals
+ * session through the expert queue instead. Read at call time so flipping the
+ * env var needs no restart. DO NOT change the default without a policy decision.
+ */
+function isL3AutoFinalizeEnabled(): boolean {
+  return (process.env.L3_AUTO_FINALIZE || 'true').toLowerCase() === 'true';
+}
+
+/**
  * L3-with-practicals auto-finalize on submit (운영기획서 §10).
  *
  * After the MCQ auto-grade, the submit path calls this to await the AI prescore
@@ -35,6 +48,19 @@ export class L3AutoFinalizeService {
     tasks: TaskTemplate[],
     writtenPct: number,
   ): Promise<boolean> {
+    if (!isL3AutoFinalizeEnabled()) {
+      // Auto-finalize disabled by policy: run the AI prescore in the background
+      // and leave the session SUBMITTED for the expert queue (same as L1/L2).
+      void this.essayGrading
+        .aiPrescoreSession(sessionId)
+        .catch((err) =>
+          this.logger.warn(`AI prescore failed for session ${sessionId}: ${(err as Error).message}`),
+        );
+      this.logger.log(
+        JSON.stringify({ msg: 'l3_autofinalize_deferred', sessionId, reason: 'disabled_by_policy' }),
+      );
+      return false;
+    }
     const outcome = await this.racePrescore(sessionId);
     if (outcome !== 'done') {
       this.logger.log(JSON.stringify({ msg: 'l3_autofinalize_deferred', sessionId, reason: outcome }));

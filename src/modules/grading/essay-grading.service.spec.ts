@@ -72,7 +72,18 @@ const CLAUDE_RESULT: EssayGradeResult = {
   rationale: 'ok', model: 'claude-opus-4-8', promptHash: 'h', latencyMs: 100, degraded: false,
 };
 
-function harness(session: unknown, tasks: unknown[], grade: jest.Mock = jest.fn(async () => CLAUDE_RESULT)) {
+interface CodeMock {
+  isCodeTask: (tpl: unknown) => boolean;
+  autoGrade: jest.Mock;
+  isJudge0Configured: () => boolean;
+}
+
+function harness(
+  session: unknown,
+  tasks: unknown[],
+  grade: jest.Mock = jest.fn(async () => CLAUDE_RESULT),
+  codeMock?: CodeMock,
+) {
   const essayUpdate = jest.fn(async () => ({}));
   const sessionUpdate = jest.fn(async () => ({}));
   const prisma = {
@@ -81,7 +92,11 @@ function harness(session: unknown, tasks: unknown[], grade: jest.Mock = jest.fn(
     essayAnswer: { update: essayUpdate },
   } as unknown as PrismaService;
   const grader = { isConfigured: () => true, grade } as unknown as ClaudeEssayGraderService;
-  const code = { isCodeTask: () => false, autoGrade: jest.fn() } as unknown as CodeGradingService;
+  const code = (codeMock ?? {
+    isCodeTask: () => false,
+    autoGrade: jest.fn(),
+    isJudge0Configured: () => true,
+  }) as unknown as CodeGradingService;
   const svc = new EssayGradingService(prisma, grader, code, new L3PracticalGraderService());
   return { svc, essayUpdate, sessionUpdate, grade };
 }
@@ -165,6 +180,66 @@ describe('EssayGradingService dispatcher', () => {
     await svc.aiPrescoreSession('s6');
 
     expect(grade).toHaveBeenCalledTimes(1); // structured parse failed → Claude
+    expect(dataOf(sessionUpdate).mandatoryReview).toBe(true);
+  });
+
+  it('L2 42% task with self-reported band "normal" → numeric trigger forces mandatoryReview', async () => {
+    const task = makeTask({ id: 'l2n', level: CertLevel.L2, points: 30, rubric: { criteria: ['평가(30점)'] } });
+    const grade: jest.Mock = jest.fn(async () => ({
+      ...CLAUDE_RESULT,
+      criterionScores: [{ key: 'C1', label: 'x', maxPoints: 30, score: 13 }],
+      total: 13,
+      maxTotal: 30,
+      pct: 42,
+      band: 'normal',
+      confidence: 0.9,
+    }));
+    const session = {
+      id: 's7',
+      level: CertLevel.L2,
+      certType: CertType.AXIS,
+      writtenScore: 90,
+      essayAnswers: [makeAnswer({ taskId: 'l2n', contentText: '부실한 답안', part: ExamPart.PRACTICAL })],
+    };
+    const { svc, sessionUpdate } = harness(session, [task], grade);
+
+    await svc.aiPrescoreSession('s7');
+
+    expect(dataOf(sessionUpdate).mandatoryReview).toBe(true);
+  });
+
+  it('AXIS-C code task, Judge0 unconfigured → Claude fallback, forbidden flags, forced review', async () => {
+    const task = makeTask({
+      id: 'c1',
+      level: CertLevel.L2,
+      certType: CertType.AXIS_C,
+      points: 30,
+      rubric: { criteria: ['코드 품질(30점)'], testCases: [{ stdin: '1', expectedOutput: '1' }] },
+    });
+    const session = {
+      id: 's8',
+      level: CertLevel.L2,
+      certType: CertType.AXIS_C,
+      writtenScore: 90,
+      essayAnswers: [
+        makeAnswer({
+          taskId: 'c1',
+          contentText: 'import requests\nprint(requests.get("http://x").text)',
+          part: ExamPart.PRACTICAL,
+        }),
+      ],
+    };
+    const codeMock: CodeMock = {
+      isCodeTask: () => true,
+      autoGrade: jest.fn(async () => null),
+      isJudge0Configured: () => false,
+    };
+    const { svc, essayUpdate, sessionUpdate } = harness(session, [task], undefined, codeMock);
+
+    await svc.aiPrescoreSession('s8');
+
+    const flags = dataOf(essayUpdate).aiRiskFlags as Array<{ code: string }>;
+    expect(flags.some((f) => f.code === 'forbidden_pattern')).toBe(true);
     expect(dataOf(sessionUpdate).mandatoryReview).toBe(true);
   });
 

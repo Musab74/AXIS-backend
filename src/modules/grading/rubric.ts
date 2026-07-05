@@ -31,6 +31,8 @@ export interface L3Reference {
   answerKey: string | null;
   /** Task-level risk patterns to watch for, serialized. */
   riskFlags: string | null;
+  /** Item-author expert-review conditions (seed: rubric.expertReviewTrigger), serialized. */
+  expertReviewTrigger: string | null;
 }
 
 interface CriteriaShape {
@@ -141,6 +143,7 @@ export function parseL3Reference(rubric: unknown): L3Reference | null {
     responseFormat: serializeReference(r.responseFormat),
     answerKey: serializeReference(r.answerKey),
     riskFlags: serializeReference(r.riskFlags),
+    expertReviewTrigger: serializeReference(r.expertReviewTrigger),
   };
 }
 
