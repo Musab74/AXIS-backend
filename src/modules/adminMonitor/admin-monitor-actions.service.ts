@@ -14,6 +14,7 @@ import { AdminMonitorGateway } from './admin-monitor.gateway';
 import { AdminNotificationsService } from '../adminNotifications/admin-notifications.service';
 import { ExamSessionPauseService } from './exam-session-pause.service';
 import { MonitorHeartbeatService } from './monitor-heartbeat.service';
+import { gradeTerminatedWrittenSection } from '../grading/written-scoring';
 
 const FULLSCREEN_WARNING_THRESHOLD = 3;
 
@@ -345,6 +346,10 @@ export class AdminMonitorActionsService {
     await this.emitSessionRow(updated, updated.proctorWarnings, session.user.name);
 
     void this.cbtSessions.closeRegistrationIfFinished(null, sessionId, 'strike-threshold');
+
+    // Auto-grade the MCQ written section so the grading queue's "unfinished
+    // exam" row carries a score; essays wait for the "Grade the exam" click.
+    void gradeTerminatedWrittenSection(this.prisma, sessionId);
 
     this.logger.warn(`Admin ${actorId} terminated session ${sessionId}: ${text}`);
 

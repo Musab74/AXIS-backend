@@ -17,6 +17,7 @@ import { RedisService } from '../../integrations/redis/redis.service';
 import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-object-storage.service';
 import { assertIdentityVerifiedForSession } from './exam-identity-guard';
 import { assertRegistrationActiveForSession } from './registration-active-guard';
+import { gradeTerminatedWrittenSection } from '../grading/written-scoring';
 
 const ENTRY_WINDOW_BEFORE_MS = 30 * 60_000; // opens 30 min before exam start
 const ENTRY_WINDOW_AFTER_MS = 10 * 60_000;  // closes 10 min after exam start
@@ -745,6 +746,10 @@ export class CbtSessionsService {
     // a stuck DB query can never delay the candidate's strike response.
     if (result.terminated) {
       void this.closeRegistrationIfFinished(null, sessionId, 'strike-threshold');
+      // Auto-grade the MCQ written section of the terminated session so the
+      // admin "unfinished exam" queue shows a score. Essays stay unscored
+      // until an admin clicks "Grade the exam". Fire-and-forget.
+      void gradeTerminatedWrittenSection(this.prisma, sessionId);
     }
 
     // Strip the internal eventId before returning to the controller — the
@@ -851,6 +856,10 @@ export class CbtSessionsService {
     // if so — that single status change drops the registration off the
     // candidate's "active exams" list and blocks any future entry attempts.
     void this.closeRegistrationIfFinished(null, sessionId, 'mic-disconnected');
+    if (result.terminated) {
+      // MCQ auto-scoring for the terminated session (see written-scoring.ts).
+      void gradeTerminatedWrittenSection(this.prisma, sessionId);
+    }
 
     return {
       type: 'MIC_DISCONNECTED' as const,
@@ -961,6 +970,10 @@ export class CbtSessionsService {
 
     if (result.terminated) {
       void this.closeRegistrationIfFinished(null, sessionId, 'strike-threshold');
+      // Auto-grade the MCQ written section of the terminated session so the
+      // admin "unfinished exam" queue shows a score. Essays stay unscored
+      // until an admin clicks "Grade the exam". Fire-and-forget.
+      void gradeTerminatedWrittenSection(this.prisma, sessionId);
     }
 
     return {

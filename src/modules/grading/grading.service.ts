@@ -10,6 +10,7 @@ import { CbtSessionsService } from '../cbtSessions/cbt-sessions.service';
 import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
 import { EssayGradingService } from './essay-grading.service';
 import { L3AutoFinalizeService } from './l3-autofinalize.service';
+import { computeWrittenScoring } from './written-scoring';
 
 @Injectable()
 export class GradingService {
@@ -54,34 +55,13 @@ export class GradingService {
     });
     const bankById = new Map(bank.map((q) => [q.id, q]));
 
-    const subjectAgg = new Map<number, { name: string; earned: number; total: number }>();
-    let writtenEarned = 0;
-    let writtenTotal = 0;
-
-    for (const a of session.answers) {
-      const q = bankById.get(a.questionId);
-      if (!q) continue;
-      
-      // Use correctAnswerKey from contentSnapshot if available (handles shuffled choices)
-      // Otherwise fall back to original correctAnswer from question bank
-      const snapshot = a.contentSnapshot as { correctAnswerKey?: string } | null;
-      const correctKey = snapshot?.correctAnswerKey ?? q.correctAnswer;
-      const correct = a.selectedChoice != null && a.selectedChoice === correctKey;
-      
-      const earned = correct ? q.points : 0;
-      writtenEarned += earned;
-      writtenTotal += q.points;
-      const agg = subjectAgg.get(q.subjectIndex) ?? { name: q.subjectName, earned: 0, total: 0 };
-      agg.earned += earned;
-      agg.total += q.points;
-      subjectAgg.set(q.subjectIndex, agg);
+    const { perAnswer, subjectAgg, writtenPct } = computeWrittenScoring(session.answers, bankById);
+    for (const pa of perAnswer) {
       await this.prisma.answer.update({
-        where: { id: a.id },
-        data: { isCorrect: correct, earnedPoints: earned },
+        where: { id: pa.answerId },
+        data: { isCorrect: pa.correct, earnedPoints: pa.earned },
       });
     }
-
-    const writtenPct = writtenTotal > 0 ? Math.round((writtenEarned / writtenTotal) * 100) : 0;
 
     // Grade only the practical tasks selected for THIS session (the set
     // pre-created as EssayAnswer rows at start), not the whole task bank.

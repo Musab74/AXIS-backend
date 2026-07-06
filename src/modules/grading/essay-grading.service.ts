@@ -15,6 +15,7 @@ import { scanForbiddenPatterns } from './forbidden-patterns';
 import { L3PracticalGraderService, parseL3Submission } from './l3-practical-grader.service';
 import type { L3GradeResult, L3Submission } from './l3-practical-grader.types';
 import { computeMandatoryReview, sessionReviewFromTaskPcts } from './review-triggers';
+import { gradeTerminatedWrittenSection } from './written-scoring';
 import {
   EssayGradePersist,
   GradingStrategyName,
@@ -101,6 +102,11 @@ export class EssayGradingService {
   }
 
   async aiPrescoreSession(sessionId: string): Promise<AiPrescoreSummary> {
+    // "Grade the exam" on a force-terminated session: make sure its MCQ
+    // written section is scored first (no-op for non-terminated or
+    // already-scored sessions) so one click grades everything gradeable.
+    await gradeTerminatedWrittenSection(this.prisma, sessionId);
+
     const session = await this.prisma.examSession.findUnique({
       where: { id: sessionId },
       include: { essayAnswers: true },

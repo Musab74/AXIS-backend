@@ -24,7 +24,7 @@ export class AdminGradingController {
   @Get('queue')
   @ApiOperation({ summary: 'Admin grading queue (all cert series for experts)' })
   queue(@CurrentUser() viewer: AuthenticatedUser, @Query('status') status?: string) {
-    const valid: GradingQueueStatus[] = ['all', 'auto_done', 'ai_graded', 'reviewing', 'final', 'overdue'];
+    const valid: GradingQueueStatus[] = ['all', 'auto_done', 'ai_graded', 'reviewing', 'final', 'overdue', 'terminated'];
     const s = (status ?? 'all') as GradingQueueStatus;
     return this.svc.listQueue(valid.includes(s) ? s : 'all', { id: viewer.id, roles: viewer.roles });
   }

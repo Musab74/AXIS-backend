@@ -34,7 +34,8 @@ export type GradingQueueStatus =
   | 'ai_graded'
   | 'reviewing'
   | 'final'
-  | 'overdue';
+  | 'overdue'
+  | 'terminated';
 
 export type PracticalState = 'auto' | 'ai_graded' | 'expert_reviewing' | 'final' | 'expert_disputed';
 
@@ -81,6 +82,8 @@ export interface GradingQueueRow {
   assignedExpertId: string | null;
   assignedExpert: string | null;
   mandatoryReview: boolean;
+  /** Force-terminated (unfinished) exam — answers saved, graded only on demand. */
+  terminated: boolean;
 }
 
 export interface FinalizedSessionResult {
@@ -144,7 +147,14 @@ export class AdminGradingService {
     const isExpertOnly = this.isExpertOnlyViewer(viewer);
     const sessions = await this.prisma.examSession.findMany({
       where: {
-        status: { in: [ExamSessionStatus.SUBMITTED, ExamSessionStatus.GRADED] },
+        // Force-terminated (unfinished) sessions surface in the ADMIN queue so
+        // their saved answers can be graded on demand ("Grade the exam").
+        // Experts never see them — expert scoring requires SUBMITTED anyway.
+        status: {
+          in: isExpertOnly
+            ? [ExamSessionStatus.SUBMITTED, ExamSessionStatus.GRADED]
+            : [ExamSessionStatus.SUBMITTED, ExamSessionStatus.GRADED, ExamSessionStatus.TERMINATED],
+        },
         ...(allowed ? { certType: { in: allowed } } : {}),
         // Experts grade any session that HAS a practical section. That is every
         // L1/L2 and — when L3_PRACTICALS_ENABLED — L3-with-practicals too. Legacy
@@ -195,7 +205,11 @@ export class AdminGradingService {
     const now = Date.now();
     const rows: GradingQueueRow[] = sessions.map((s) => {
       const due = new Date((s.submittedAt ?? s.updatedAt).getTime() + GRADING_SLA_DAYS * 86_400_000);
-      const overdue = now > due.getTime() && s.status !== ExamSessionStatus.GRADED;
+      // Terminated sessions have no grading SLA — they are graded on demand.
+      const overdue =
+        now > due.getTime() &&
+        s.status !== ExamSessionStatus.GRADED &&
+        s.status !== ExamSessionStatus.TERMINATED;
       const reg = s.registrationId ? regById.get(s.registrationId) : null;
       const practicalState = this.derivePracticalState(s, pointsByTask);
       return {
@@ -213,6 +227,7 @@ export class AdminGradingService {
         assignedExpertId: s.assignedExpertId ?? null,
         assignedExpert: s.assignedExpertId ? expertNameById.get(s.assignedExpertId) ?? null : null,
         mandatoryReview: s.mandatoryReview,
+        terminated: s.status === ExamSessionStatus.TERMINATED,
       };
     });
 
@@ -226,6 +241,7 @@ export class AdminGradingService {
     reviewing: number;
     final: number;
     overdue: number;
+    terminated: number;
   }> {
     const all = await this.listQueue('all', viewer);
     return {
@@ -235,6 +251,7 @@ export class AdminGradingService {
       reviewing: all.filter((r) => this.matchesTab(r, 'reviewing')).length,
       final: all.filter((r) => this.matchesTab(r, 'final')).length,
       overdue: all.filter((r) => r.overdue).length,
+      terminated: all.filter((r) => r.terminated).length,
     };
   }
 
@@ -242,14 +259,21 @@ export class AdminGradingService {
     switch (tab) {
       case 'all':
         return true;
+      // Terminated (unfinished) sessions live ONLY in 'all' and their own tab —
+      // they have no grading workflow states, just saved answers.
+      case 'terminated':
+        return row.terminated;
       case 'auto_done':
-        return row.practicalState === 'auto';
+        return !row.terminated && row.practicalState === 'auto';
       case 'ai_graded':
-        return row.practicalState === 'ai_graded';
+        return !row.terminated && row.practicalState === 'ai_graded';
       case 'reviewing':
-        return row.practicalState === 'expert_reviewing' || row.practicalState === 'expert_disputed';
+        return (
+          !row.terminated &&
+          (row.practicalState === 'expert_reviewing' || row.practicalState === 'expert_disputed')
+        );
       case 'final':
-        return row.practicalState === 'final';
+        return !row.terminated && row.practicalState === 'final';
       case 'overdue':
         return row.overdue;
     }
@@ -414,6 +438,7 @@ export class AdminGradingService {
       practicalScore: session.practicalScore,
       totalScore: session.totalScore,
       passed: session.passed,
+      failReason: session.failReason,
       mandatoryReview: session.mandatoryReview,
       assignedExpertId,
       proctorWarnings: session.proctorWarnings,
