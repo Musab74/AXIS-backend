@@ -4,9 +4,57 @@ import { createHash } from 'crypto';
 const prisma = new PrismaClient();
 
 type SubjectSpec = { name: string; qs: number; pts: number };
+type PracticalSpec = {
+  part: ExamPart;
+  title: string;
+  durationMin: number;
+  points: number;
+  scenario: string;
+  /** v2.0 (WP5): exact Korean practice-type enum label (L2 실습형). */
+  taskType?: string;
+  /** v2.0 (WP5): "(n점)"-weighted criterion lines consumed by parseRubric. */
+  rubricCriteria?: string[];
+};
 type LevelSpec = {
   written: SubjectSpec[];
-  practical?: { part: ExamPart; title: string; durationMin: number; points: number; scenario: string }[];
+  practical?: PracticalSpec[];
+};
+
+/**
+ * L2 실습형 고정 배점·루브릭 (L2 기획서 v2.0 — WP5): Task A/B/C = 25/25/20,
+ * 채점은 A+B+C 직접 70점 합산 (old 100-pt global rubric is reference-only).
+ * `taskType` must be the exact enum string used by the session-aggregate
+ * records ("업무 산출물 작성·개선형" 등).
+ */
+const L2_TASK_A = {
+  taskType: '업무 산출물 작성·개선형',
+  rubricCriteria: [
+    '업무 목적 부합(5점)',
+    'AI 지시·컨텍스트 설계(5점)',
+    '산출물 완성도·품질(8점)',
+    '검증·리스크 반영(4점)',
+    '수정 근거 제시(3점)',
+  ],
+};
+const L2_TASK_B = {
+  taskType: '자료 요약·분석·검증형',
+  rubricCriteria: [
+    '핵심 요약(5점)',
+    '분석·검증 정확성(8점)',
+    '출처·계산 확인(5점)',
+    '요약 자료 구조화(4점)',
+    '리스크 통제(3점)',
+  ],
+};
+const L2_TASK_C = {
+  taskType: '업무흐름 개선·자동화 설계형',
+  rubricCriteria: [
+    '업무흐름 설계(6점)',
+    'AI 활용 단계·도구 선정(5점)',
+    '사람 검토·승인 지점(4점)',
+    '리스크 통제(3점)',
+    '실행 가능성(2점)',
+  ],
 };
 
 const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
@@ -26,9 +74,9 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'AI Ethics & Security Practice', qs: 5, pts: 2 },
       ],
       practical: [
-        { part: ExamPart.PRACTICAL, title: 'Task A: Draft a business deliverable with AI', durationMin: 20, points: 25, scenario: 'Use the in-platform AI chat to produce a 200-word marketing email for a new fitness app launch. Include subject line, body, and CTA.' },
-        { part: ExamPart.PRACTICAL, title: 'Task B: Summarize & verify source material', durationMin: 20, points: 25, scenario: 'Given a 1,200-word meeting transcript, use AI to produce a 5-bullet summary plus a list of action items, and flag anything that needs verification.' },
-        { part: ExamPart.PRACTICAL, title: 'Task C: Improve a workflow with AI', durationMin: 20, points: 20, scenario: 'Use AI to draft a one-page sales report from the provided CSV snippet. Include 1 chart description and 3 insights.' },
+        { part: ExamPart.PRACTICAL, title: 'Task A: Draft a business deliverable with AI', durationMin: 20, points: 25, scenario: 'Use the in-platform AI chat to produce a 200-word marketing email for a new fitness app launch. Include subject line, body, and CTA.', ...L2_TASK_A },
+        { part: ExamPart.PRACTICAL, title: 'Task B: Summarize & verify source material', durationMin: 20, points: 25, scenario: 'Given a 1,200-word meeting transcript, use AI to produce a 5-bullet summary plus a list of action items, and flag anything that needs verification.', ...L2_TASK_B },
+        { part: ExamPart.PRACTICAL, title: 'Task C: Improve a workflow with AI', durationMin: 20, points: 20, scenario: 'Use AI to draft a one-page sales report from the provided CSV snippet. Include 1 chart description and 3 insights.', ...L2_TASK_C },
       ],
     },
     L1: {
@@ -92,9 +140,9 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'Healthcare AI Ethics, Privacy & Security', qs: 5, pts: 2 },
       ],
       practical: [
-        { part: ExamPart.PRACTICAL, title: 'Task A: Draft a non-clinical patient notice', durationMin: 20, points: 25, scenario: 'Use AI to draft a patient appointment-reminder notice from the supplied (synthetic) administrative notes. Strip all patient-identifying information before prompting; avoid any diagnosis/treatment wording.' },
-        { part: ExamPart.PRACTICAL, title: 'Task B: Summarize & verify administrative material', durationMin: 20, points: 25, scenario: 'Use AI to summarize the supplied hospital administrative document, and flag any expression that could be mistaken for medical advice or false reassurance.' },
-        { part: ExamPart.PRACTICAL, title: 'Task C: Improve a non-clinical workflow', durationMin: 20, points: 20, scenario: 'Design a non-clinical FAQ workflow for pre-op fasting *administrative* guidance. Include 3 safety guardrails ensuring no clinical judgement is implied.' },
+        { part: ExamPart.PRACTICAL, title: 'Task A: Draft a non-clinical patient notice', durationMin: 20, points: 25, scenario: 'Use AI to draft a patient appointment-reminder notice from the supplied (synthetic) administrative notes. Strip all patient-identifying information before prompting; avoid any diagnosis/treatment wording.', ...L2_TASK_A },
+        { part: ExamPart.PRACTICAL, title: 'Task B: Summarize & verify administrative material', durationMin: 20, points: 25, scenario: 'Use AI to summarize the supplied hospital administrative document, and flag any expression that could be mistaken for medical advice or false reassurance.', ...L2_TASK_B },
+        { part: ExamPart.PRACTICAL, title: 'Task C: Improve a non-clinical workflow', durationMin: 20, points: 20, scenario: 'Design a non-clinical FAQ workflow for pre-op fasting *administrative* guidance. Include 3 safety guardrails ensuring no clinical judgement is implied.', ...L2_TASK_C },
       ],
     },
     L1: {
@@ -186,10 +234,15 @@ async function main() {
               part: t.part,
               title: t.title,
               scenario: t.scenario,
-              rubric: { criteria: ['Clarity', 'Correctness', 'AI usage process'], maxPerCriterion: Math.floor(t.points / 3) },
+              // v2.0 (WP5): fixed per-task criterion lists where defined;
+              // legacy generic placeholder otherwise.
+              rubric: t.rubricCriteria
+                ? { criteria: t.rubricCriteria, rubric_version: '2.0' }
+                : { criteria: ['Clarity', 'Correctness', 'AI usage process'], maxPerCriterion: Math.floor(t.points / 3) },
               durationMin: t.durationMin,
               points: t.points,
               orderIndex: ti,
+              taskType: t.taskType ?? null,
             },
           });
         }

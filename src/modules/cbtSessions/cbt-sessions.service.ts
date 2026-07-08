@@ -3,7 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { CertLevel, CertType, ExamSessionStatus, Prisma, ProctorEventType, RegistrationStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
-import { getTiming, getExamSpec, MAX_ATTEMPTS } from './exam-spec';
+import { currentSpecVersion, getTiming, getExamSpec, MAX_ATTEMPTS, toSpecVersion } from './exam-spec';
+import {
+  auditAnswerPositions,
+  BANK_BLUEPRINTS_V2,
+  isDrawablePretest,
+  isDrawableScored,
+  L3_PRACTICAL_MIN_PER_TYPE,
+} from './question-bank-v2';
 import { getBonusAttempts } from './registration-bonus-attempts';
 import type { ConsentDto } from './cbt-sessions.dto';
 import {
@@ -140,6 +147,7 @@ export class CbtSessionsService {
         level,
         attemptNo: (lastAttempt?.attemptNo ?? 0) + 1,
         status: ExamSessionStatus.CREATED,
+        specVersion: currentSpecVersion(),
       },
     });
   }
@@ -255,6 +263,7 @@ export class CbtSessionsService {
           level: registration.level,
           attemptNo: (lastAttempt?.attemptNo ?? 0) + 1,
           status: ExamSessionStatus.CREATED,
+          specVersion: currentSpecVersion(),
         },
       });
     }
@@ -373,15 +382,21 @@ export class CbtSessionsService {
     );
 
     const seed = randomUUID();
-    const timing = getTiming(s.certType, s.level);
+    // The paper (and deadline) freezes under the spec version stamped at
+    // session creation — a CREATED session that outlives a version rollout
+    // still starts with its own version's timing/shape.
+    const specVersion = toSpecVersion(s.specVersion);
+    const timing = getTiming(s.certType, s.level, specVersion);
     const startedAt = new Date();
     const hardDeadline = new Date(startedAt.getTime() + timing.totalMinutes * 60_000);
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const examSpec = getExamSpec(s.certType, s.level);
+      const examSpec = getExamSpec(s.certType, s.level, specVersion);
       
-      // Load all questions grouped by subject
-      const allQuestions = await tx.questionBank.findMany({
+      // Load the drawable pool. v2.0 (WP10): only 승인 items are drawable as
+      // scored items; NULL-lifecycle rows are legacy banks and stay drawable
+      // through `active` alone.
+      const allBankRows = await tx.questionBank.findMany({
         where: {
           certType: s.certType,
           level: s.level,
@@ -389,14 +404,31 @@ export class CbtSessionsService {
         },
         orderBy: [{ subjectIndex: 'asc' }, { id: 'asc' }],
       });
-      
+      const allQuestions = allBankRows.filter((q) => isDrawableScored(q.lifecycleStatus));
+      const pretestPool = allBankRows.filter((q) => isDrawablePretest(q.lifecycleStatus));
+
       if (allQuestions.length === 0) {
         throw new BadRequestException('Question bank empty for this exam — run db:seed:questions first.');
       }
-      
+
+      // Ops bank-size floor (v2.0): warn (never block) when the drawable pool
+      // is below the level's operating minimum.
+      const blueprint = BANK_BLUEPRINTS_V2[s.level];
+      if (allQuestions.length < blueprint.minBankSize) {
+        this.logger.warn(
+          JSON.stringify({
+            msg: 'question_bank_below_v2_minimum',
+            certType: s.certType,
+            level: s.level,
+            drawable: allQuestions.length,
+            minimum: blueprint.minBankSize,
+          }),
+        );
+      }
+
       // Select questions respecting subject distribution
       let selectedQuestions: typeof allQuestions = [];
-      
+
       if (examSpec.subjectDistribution) {
         // Group questions by subject
         const bySubject = new Map<number, typeof allQuestions>();
@@ -405,7 +437,7 @@ export class CbtSessionsService {
           list.push(q);
           bySubject.set(q.subjectIndex, list);
         }
-        
+
         // Select required count from each subject
         for (const [subjectIndex, count] of Object.entries(examSpec.subjectDistribution)) {
           const subjectQuestions = bySubject.get(Number(subjectIndex)) ?? [];
@@ -417,10 +449,20 @@ export class CbtSessionsService {
         const shuffled = shuffleWithSeed(allQuestions, seed);
         selectedQuestions = shuffled.slice(0, examSpec.writtenQuestionCount);
       }
-      
-      // Final shuffle of all selected questions
-      const finalQuestions = shuffleWithSeed(selectedQuestions, seed);
-      
+
+      // v2.0 (WP10) 사전검증(비채점) embedding: up to maxPretestPerForm items
+      // in 사전검증 lifecycle join the paper unmarked. They consume exam time
+      // and record answers for statistics, but contribute 0 to every score
+      // and are excluded from all gate math (Answer.isPretest).
+      const pretestQuestions =
+        specVersion === '2.0' && pretestPool.length > 0
+          ? shuffleWithSeed(pretestPool, seed + 7).slice(0, blueprint.maxPretestPerForm)
+          : [];
+      const pretestIds = new Set(pretestQuestions.map((q) => q.id));
+
+      // Final shuffle of all selected questions (+ interleaved pretest slots).
+      const finalQuestions = shuffleWithSeed([...selectedQuestions, ...pretestQuestions], seed);
+
       await tx.answer.createMany({
         data: finalQuestions.map((q, i) => {
           const originalChoices = (q.choices as unknown as Choice[]) ?? [];
@@ -449,17 +491,42 @@ export class CbtSessionsService {
             sessionId,
             questionId: q.id,
             qVersion: q.qVersion,
-            contentSnapshot: { 
-              stem: q.stem, 
+            contentSnapshot: {
+              stem: q.stem,
               choices: finalChoices,
-              subjectName: q.subjectName, 
+              subjectName: q.subjectName,
               points: q.points,
               correctAnswerKey,
             } as unknown as Prisma.InputJsonValue,
             orderIndex: i,
+            isPretest: pretestIds.has(q.id),
           };
         }),
       });
+
+      // v2.0 (WP10) exposure tracking + 정답위치 감사. The audit warns (never
+      // blocks — the per-session choice shuffle already randomizes positions;
+      // the audit primarily protects shuffle-exempt forms).
+      await tx.questionBank.updateMany({
+        where: { id: { in: finalQuestions.map((q) => q.id) } },
+        data: { exposureCount: { increment: 1 } },
+      });
+      {
+        const keys = finalQuestions
+          .filter((q) => !pretestIds.has(q.id))
+          .map((q) => q.correctAnswer ?? 'A');
+        const audit = auditAnswerPositions(keys);
+        if (!audit.ok) {
+          this.logger.warn(
+            JSON.stringify({
+              msg: 'answer_position_audit',
+              sessionId,
+              problems: audit.problems,
+              counts: audit.counts,
+            }),
+          );
+        }
+      }
 
       // ── Practical (실기) section ──────────────────────────────────────────
       // L1/L2 add a practical part after the written MCQs. Mirror the MCQ flow:
@@ -468,10 +535,14 @@ export class CbtSessionsService {
       // the pre-created Answer rows. getPaper/grading both read the session's
       // selected set from these rows (never the full task bank).
       if (examSpec.practicalTaskCount > 0) {
-        const allTasks = await tx.taskTemplate.findMany({
+        const allTaskRows = await tx.taskTemplate.findMany({
           where: { certType: s.certType, level: s.level },
           orderBy: [{ setNo: 'asc' }, { orderIndex: 'asc' }],
         });
+        // v2.0 (WP10): only 승인 (or legacy NULL-lifecycle) tasks are drawable.
+        const allTasks = allTaskRows.filter(
+          (t) => t.isActive && isDrawableScored(t.lifecycleStatus),
+        );
 
         let chosenTasks: typeof allTasks = [];
 
@@ -491,6 +562,18 @@ export class CbtSessionsService {
           const wantedTypes = ['현업적용형', '지시설계형', '분석검증형', '리스크판단형'];
           for (const type of wantedTypes) {
             const pool = byType.get(type);
+            // v2.0 ops floor: ≥ L3_PRACTICAL_MIN_PER_TYPE items per type.
+            if ((pool?.length ?? 0) < L3_PRACTICAL_MIN_PER_TYPE) {
+              this.logger.warn(
+                JSON.stringify({
+                  msg: 'l3_practical_pool_below_v2_minimum',
+                  certType: s.certType,
+                  type,
+                  size: pool?.length ?? 0,
+                  minimum: L3_PRACTICAL_MIN_PER_TYPE,
+                }),
+              );
+            }
             if (pool && pool.length > 0) {
               const pick = shuffleWithSeed(pool, `${seed}:practical:${type}`)[0];
               chosenTasks.push(pick);
@@ -540,12 +623,31 @@ export class CbtSessionsService {
               aiRationale: 'Pending review.',
             })),
           });
+          // v2.0 (WP10): exposure tracking for drawn tasks (anchor management).
+          await tx.taskTemplate.updateMany({
+            where: { id: { in: chosenTasks.map((t) => t.id) } },
+            data: { exposureCount: { increment: 1 } },
+          });
         }
       }
 
       return tx.examSession.update({
         where: { id: sessionId },
-        data: { status: ExamSessionStatus.IN_PROGRESS, paperSeed: seed, startedAt, hardDeadline },
+        data: {
+          status: ExamSessionStatus.IN_PROGRESS,
+          paperSeed: seed,
+          startedAt,
+          hardDeadline,
+          // v2.0 L2 audit (WP5): the embedded-AI model+version is fixed per
+          // exam round and recorded on the session (기획서 v2.0 3-3). The env
+          // override lets ops pin a round-specific version string.
+          ...(specVersion === '2.0' && s.level === CertLevel.L2
+            ? {
+                embeddedAiVersion:
+                  process.env.EMBEDDED_AI_VERSION || 'claude-sonnet-4-6',
+              }
+            : {}),
+        },
       });
     });
 

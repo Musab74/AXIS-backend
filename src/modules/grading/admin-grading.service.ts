@@ -6,11 +6,24 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CertLevel, CertType, ExamPart, ExamSessionStatus, Prisma, ScoringRound } from '@prisma/client';
+import {
+  CertLevel,
+  CertType,
+  DecisionStatus,
+  ExamPart,
+  ExamSessionStatus,
+  Prisma,
+  ScoringRound,
+} from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma.service';
 import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-object-storage.service';
-import { getTiming, getScoring, computeWeightedResult } from '../cbtSessions/exam-spec';
+import {
+  getTiming,
+  getScoring,
+  computeWeightedResult,
+  toSpecVersion,
+} from '../cbtSessions/exam-spec';
 import { CertificatesService, IssuedCertificate } from '../certificates/certificates.service';
 import { CbtSessionsService } from '../cbtSessions/cbt-sessions.service';
 import { FinalizeSessionDto } from './dto/finalize-session.dto';
@@ -19,6 +32,7 @@ import { GRADING_CONFIG } from './grading-config';
 import { parseExpertCertScopes } from './expert-scopes';
 import { parseL3Reference } from './rubric';
 import { anyAnswerEscalated, isScoreDisputed } from './review-triggers';
+import { SessionAggregateService } from './session-aggregate.service';
 import {
   attachmentFileNameFromKey,
   encodeDeliverableReview,
@@ -114,6 +128,7 @@ export class AdminGradingService {
     private readonly cbtSessions: CbtSessionsService,
     private readonly ncp: NcObjectStorageService,
     private readonly config: ConfigService,
+    private readonly aggregates: SessionAggregateService,
   ) {}
 
   /** Grading queue scope — `null` means all cert series (admins + unscoped experts). */
@@ -856,7 +871,8 @@ export class AdminGradingService {
     }
     const scoreByTask = new Map(dto.tasks.map((t) => [t.taskId, t]));
 
-    const timing = getTiming(session.certType, session.level);
+    const specVersion = toSpecVersion(session.specVersion);
+    const timing = getTiming(session.certType, session.level, specVersion);
 
     // Per-part section percentages. WRITTEN comes from the MCQ auto-score; each
     // practical part (PRACTICAL / DELIVERABLE / ESSAY) is summed independently
@@ -886,13 +902,12 @@ export class AdminGradingService {
     const practicalPct =
       practicalTotal > 0 ? Math.round((practicalEarned / practicalTotal) * 100) : 0;
 
-    // Weighted 100-point total + section floors (spec §4-4). Pass requires the
-    // total to clear passTotal AND every section to clear its floor (과락).
-    const scoring = getScoring(session.certType, session.level);
-    const { total: totalScore, passed, floorFailures } = computeWeightedResult(
-      scoring,
-      sectionPct,
-    );
+    // Weighted 100-point total + section floors/hard cuts (v1.1 spec §4-4;
+    // v2.0 이중 최저기준). Pass requires the total to clear passTotal AND every
+    // section to clear its floor (과락).
+    const scoring = getScoring(session.certType, session.level, specVersion);
+    const { total: totalScore, passed, floorFailures, gateResults, failedGates } =
+      computeWeightedResult(scoring, sectionPct);
 
     const failReasonAuto = (() => {
       if (passed) return null;
@@ -980,6 +995,17 @@ export class AdminGradingService {
           passed,
           failReason,
           submittedAt: session.submittedAt ?? new Date(),
+          // v2.0 (WP4): expert finalize IS the human lock — persist the
+          // confirmed decision state alongside the legacy fields.
+          ...(specVersion === '2.0'
+            ? {
+                decisionStatus: passed
+                  ? DecisionStatus.CONFIRMED_PASS
+                  : DecisionStatus.CONFIRMED_FAIL,
+                confirmedAt: new Date(),
+                confirmedByRef: actorId,
+              }
+            : {}),
         },
       });
 
@@ -1019,7 +1045,15 @@ export class AdminGradingService {
           action: 'SESSION_FINALIZED',
           entityType: 'ExamSession',
           entityId: sessionId,
-          after: { writtenPct, practicalPct, totalScore, passed, boundary } as Prisma.InputJsonValue,
+          after: {
+            writtenPct,
+            practicalPct,
+            totalScore,
+            passed,
+            boundary,
+            gateResults,
+            failedGates,
+          } as Prisma.InputJsonValue,
           reason: failReason,
         },
       });
@@ -1063,6 +1097,9 @@ export class AdminGradingService {
       'finalize',
     );
 
+    // WP7: every score change / confirmation refreshes the aggregate.
+    this.aggregates.rebuildSafely(sessionId, 'finalize');
+
     return {
       sessionId,
       status: ExamSessionStatus.GRADED,
@@ -1073,6 +1110,302 @@ export class AdminGradingService {
       failReason,
       certificate,
     };
+  }
+
+  /**
+   * v2.0 (WP4): human lock for a staged L3 session. The auto-prescore staged
+   * scores + PROVISIONAL/IN_REVIEW; this recomputes the weighted total and
+   * hard cuts from the persisted section scores, locks the decision
+   * (CONFIRMED_PASS / CONFIRMED_FAIL + confirmed_at + confirmed_by_ref), flips
+   * the session to GRADED, and issues the certificate ONLY here on a pass.
+   */
+  async confirmDecision(actorId: string, actorRoles: string[], sessionId: string) {
+    const session = await this.prisma.examSession.findUnique({
+      where: { id: sessionId },
+      include: { essayAnswers: true },
+    });
+    if (!session) throw new NotFoundException('Session not found');
+    const specVersion = toSpecVersion(session.specVersion);
+    if (specVersion !== '2.0') {
+      throw new BadRequestException(
+        'Decision confirmation applies to v2.0 sessions only — v1.1 sessions use the legacy finalize flow.',
+      );
+    }
+    if (
+      session.decisionStatus !== DecisionStatus.PROVISIONAL &&
+      session.decisionStatus !== DecisionStatus.IN_REVIEW
+    ) {
+      throw new ConflictException(
+        `Session decision is ${session.decisionStatus ?? 'not staged'} — only provisional/in_review sessions can be confirmed.`,
+      );
+    }
+    if (session.status !== ExamSessionStatus.SUBMITTED) {
+      throw new ConflictException(
+        `Cannot confirm a session in status ${session.status} — it must be SUBMITTED.`,
+      );
+    }
+    if (session.totalScore == null || session.practicalScore == null) {
+      throw new BadRequestException(
+        'Session scores are not fully staged yet — run AI prescore / expert scoring first.',
+      );
+    }
+    await this.assertWithinCertScope(actorId, actorRoles, session.certType);
+    // AXIS-H severity ladder applies to the lock step exactly as to finalize.
+    const isGradingAdmin = actorRoles.some((r) => r === 'SUPER_ADMIN' || r === 'GRADING_ADMIN');
+    if (
+      session.certType === CertType.AXIS_H &&
+      !isGradingAdmin &&
+      anyAnswerEscalated(session.essayAnswers)
+    ) {
+      throw new ForbiddenException(
+        'This AXIS-H session carries a HIGH/CRITICAL medical risk flag (불합격 검토). ' +
+          'Only a GRADING_ADMIN may confirm it.',
+      );
+    }
+
+    const scoring = getScoring(session.certType, session.level, specVersion);
+    const writtenPct = session.writtenScore ?? 0;
+    const practicalPct = session.practicalScore ?? 0;
+    const sectionPct = (part: ExamPart): number =>
+      part === ExamPart.WRITTEN ? writtenPct : practicalPct;
+    const { total: totalScore, passed, floorFailures, gateResults, failedGates } =
+      computeWeightedResult(scoring, sectionPct);
+    const failReason = passed
+      ? null
+      : [
+          ...floorFailures.map((p) => `${p} below section minimum (${sectionPct(p)}%).`),
+          ...(totalScore < scoring.passTotal ? [`Total below ${scoring.passTotal} (${totalScore}/100).`] : []),
+        ].join(' ');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.examSession.update({
+        where: { id: sessionId },
+        data: {
+          status: ExamSessionStatus.GRADED,
+          totalScore,
+          passed,
+          failReason,
+          decisionStatus: passed ? DecisionStatus.CONFIRMED_PASS : DecisionStatus.CONFIRMED_FAIL,
+          confirmedAt: new Date(),
+          confirmedByRef: actorId,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'DECISION_CONFIRMED',
+          entityType: 'ExamSession',
+          entityId: sessionId,
+          after: {
+            totalScore,
+            passed,
+            gateResults,
+            failedGates,
+            previousDecisionStatus: session.decisionStatus,
+          } as Prisma.InputJsonValue,
+          reason: failReason,
+        },
+      });
+    });
+
+    let certificate: IssuedCertificate | null = null;
+    if (passed) {
+      try {
+        certificate = await this.certificates.issueForSession(sessionId);
+      } catch (err) {
+        this.logger.error(
+          `Certificate issuance failed for session ${sessionId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    void this.cbtSessions.closeRegistrationIfFinished(
+      session.registrationId ?? null,
+      sessionId,
+      'finalize',
+    );
+
+    // WP7: the confirmed decision lands in the aggregate record.
+    this.aggregates.rebuildSafely(sessionId, 'confirm_decision');
+
+    this.logger.log(
+      JSON.stringify({
+        msg: 'decision_confirmed',
+        actorId,
+        sessionId,
+        totalScore,
+        passed,
+        failedGates,
+        certNumber: certificate?.certNumber ?? null,
+      }),
+    );
+    return { sessionId, totalScore, passed, failReason, failedGates, certificate };
+  }
+
+  /**
+   * v2.0 (WP4): bulk-confirm CLEAN provisional sessions (no review trigger
+   * fired → decisionStatus=PROVISIONAL and mandatoryReview=false) so ops can
+   * lock a whole round in one click. Sessions in review are never touched.
+   */
+  async bulkConfirmProvisional(
+    actorId: string,
+    actorRoles: string[],
+    filter: { sessionIds?: string[]; certType?: CertType; level?: CertLevel },
+  ) {
+    const sessions = await this.prisma.examSession.findMany({
+      where: {
+        ...(filter.sessionIds?.length ? { id: { in: filter.sessionIds } } : {}),
+        ...(filter.certType ? { certType: filter.certType } : {}),
+        ...(filter.level ? { level: filter.level } : {}),
+        specVersion: '2.0',
+        status: ExamSessionStatus.SUBMITTED,
+        decisionStatus: DecisionStatus.PROVISIONAL,
+        mandatoryReview: false,
+      },
+      select: { id: true },
+      orderBy: { submittedAt: 'asc' },
+    });
+    const results: { sessionId: string; passed?: boolean; error?: string }[] = [];
+    for (const s of sessions) {
+      try {
+        const r = await this.confirmDecision(actorId, actorRoles, s.id);
+        results.push({ sessionId: s.id, passed: r.passed });
+      } catch (err) {
+        results.push({ sessionId: s.id, error: (err as Error).message });
+      }
+    }
+    return {
+      matched: sessions.length,
+      confirmed: results.filter((r) => r.error == null).length,
+      passed: results.filter((r) => r.passed === true).length,
+      failed: results.filter((r) => r.passed === false).length,
+      results,
+    };
+  }
+
+  /**
+   * v2.0 (WP6) 게이트 확정: an expert confirms the 선택-근거 일치 게이트 on one
+   * L3 answer — the contradicted selection field's points are zeroed
+   * (해당 선택 0점) and the answer's expert score is set to the recomputed
+   * total. The AI record (aiCriterionScores/aiGate) is never mutated — it is
+   * the audit trail; the zeroing lands on expertScore. Session totals refresh
+   * through the normal finalize/confirm path afterwards.
+   */
+  async confirmGateZero(
+    actorId: string,
+    actorRoles: string[],
+    sessionId: string,
+    taskId: string,
+    fieldKey: string,
+  ) {
+    if (!fieldKey?.trim()) throw new BadRequestException('fieldKey is required (무효 처리할 선택 필드).');
+    const session = await this.prisma.examSession.findUnique({ where: { id: sessionId } });
+    if (!session) throw new NotFoundException('Session not found');
+    await this.assertWithinCertScope(actorId, actorRoles, session.certType);
+    const answer = await this.prisma.essayAnswer.findUnique({
+      where: { sessionId_taskId: { sessionId, taskId } },
+    });
+    if (!answer) throw new NotFoundException('Answer not found for this task.');
+    const gate = answer.aiGate as { triggered?: boolean; rule?: string } | null;
+    if (!gate?.triggered) {
+      throw new ConflictException('이 답안에는 발동된 게이트가 없습니다 (gate.triggered=false).');
+    }
+    const details = Array.isArray(answer.aiCriterionScores)
+      ? (answer.aiCriterionScores as Array<{ key?: string; score?: number }>)
+      : [];
+    const field = details.find((d) => d.key === fieldKey.trim());
+    if (!field) {
+      throw new BadRequestException(
+        `선택 필드 "${fieldKey}"를 채점 내역에서 찾을 수 없습니다. 사용 가능한 필드: ${details
+          .map((d) => d.key)
+          .join(', ')}`,
+      );
+    }
+    const current = answer.expertScore ?? answer.earnedPoints ?? 0;
+    const zeroed = Math.max(0, Math.round(current - (field.score ?? 0)));
+    const note = `[게이트 확정] ${gate.rule ?? '선택-근거 일치 게이트'} — "${fieldKey}" 0점 처리 (${current} → ${zeroed}).`;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.essayAnswer.update({
+        where: { id: answer.id },
+        data: {
+          expertScore: zeroed,
+          earnedPoints: zeroed,
+          expertNotes: this.mergedExpertNotes(answer.expertNotes, note, undefined),
+        },
+      });
+      await tx.expertScoringRecord.create({
+        data: {
+          sessionId,
+          taskId,
+          raterId: actorId,
+          scoringRound: ScoringRound.ADJUST,
+          criterionScores: { gateConfirmed: true, zeroedField: fieldKey, score: zeroed },
+          total: zeroed,
+          confidenceComment: note,
+          adjudicationRequired: false,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'GATE_CONFIRMED_FIELD_ZEROED',
+          entityType: 'EssayAnswer',
+          entityId: answer.id,
+          before: { earnedPoints: current } as Prisma.InputJsonValue,
+          after: { earnedPoints: zeroed, zeroedField: fieldKey } as Prisma.InputJsonValue,
+          reason: note,
+        },
+      });
+    });
+    this.logger.log(
+      JSON.stringify({ msg: 'gate_confirmed_zeroed', actorId, sessionId, taskId, fieldKey, zeroed }),
+    );
+    this.aggregates.rebuildSafely(sessionId, 'gate_confirmed');
+    return { sessionId, taskId, fieldKey, expertScore: zeroed };
+  }
+
+  /**
+   * v2.0 (WP4): invalidate a session (부정행위 등) — terminal decision state.
+   * Never issues a certificate; requires an explicit reason for the audit trail.
+   */
+  async invalidateDecision(actorId: string, sessionId: string, reason: string) {
+    if (!reason?.trim()) throw new BadRequestException('An invalidation reason is required.');
+    const session = await this.prisma.examSession.findUnique({ where: { id: sessionId } });
+    if (!session) throw new NotFoundException('Session not found');
+    if (toSpecVersion(session.specVersion) !== '2.0') {
+      throw new BadRequestException('Invalidation applies to v2.0 sessions only.');
+    }
+    if (session.decisionStatus === DecisionStatus.INVALIDATED) {
+      return { sessionId, decisionStatus: session.decisionStatus };
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.examSession.update({
+        where: { id: sessionId },
+        data: {
+          passed: false,
+          failReason: `판정 무효 처리: ${reason.trim()}`,
+          decisionStatus: DecisionStatus.INVALIDATED,
+          confirmedAt: new Date(),
+          confirmedByRef: actorId,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'DECISION_INVALIDATED',
+          entityType: 'ExamSession',
+          entityId: sessionId,
+          after: { previousDecisionStatus: session.decisionStatus } as Prisma.InputJsonValue,
+          reason: reason.trim(),
+        },
+      });
+    });
+    this.logger.log(
+      JSON.stringify({ msg: 'decision_invalidated', actorId, sessionId, reason: reason.trim() }),
+    );
+    this.aggregates.rebuildSafely(sessionId, 'invalidate');
+    return { sessionId, decisionStatus: DecisionStatus.INVALIDATED };
   }
 
   private derivePracticalState(

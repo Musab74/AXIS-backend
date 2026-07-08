@@ -1,8 +1,15 @@
 /**
- * Seeds the 4 L3 실습형 (practical) TaskTemplate rows per AXIS series, derived
- * from the v1.1 운영기획서 sample sets in `exam questions/new_files_check/...`.
+ * Seeds the 4 L3 실습형 (practical) TaskTemplate rows per AXIS series.
  *
  *   pnpm db:seed:l3-practicals
+ *
+ * 시험 표준 v2.0 (WP9): the AXIS series seeds from the re-authored v2.0 sample
+ * set (new_doc_l3 — 근거 2점 고정, 게이트, 오답 의무화, 부분점수) and carries
+ * the per-criterion splits (`fieldPoints` / `riskControl` /
+ * `generatedCriteria` / `mustNotChoose`, rubric_version '2.0') that the
+ * deterministic grader consumes. AXIS-C / AXIS-H stay on their v1.1 sample
+ * sets until v2.0 sets are authored — the grader falls back to the legacy
+ * even split for those rows.
  *
  * Production-safe by design:
  *   - Idempotent: skips a (certType, L3) pair if any L3 TaskTemplate row already
@@ -17,7 +24,7 @@
  * sessions are still unaffected because their paper was frozen on `start`.
  *
  * Source files (paths relative to repo root):
- *   exam questions/new_files_check/3_AXIS_시리즈_출제/1_AXIS/3_AXIS L3/AXIS_L3_실습형_출제자료_패키지/AXIS_L3_실습형_샘플문항_세트_v1_1.yaml
+ *   new_doc_l3/3_AXIS L3/2_실습형/AXIS_L3_실습형_샘플문항_세트_v2_0.yaml (AXIS)
  *   exam questions/new_files_check/3_AXIS_시리즈_출제/3_AXIS-C/3_AXIS-C_ L3/AXIS-C_L3_실습형_출제자료_패키지/AXIS-C_L3_실습형_샘플문항_세트_v1_1.yaml
  *   exam questions/new_files_check/3_AXIS_시리즈_출제/2_AXIS-H/3_AXIS-H_ L3/AXIS-H_L3_실습형_출제자료_패키지/AXIS-H_L3_실습형_샘플문항_세트_v1_1.yaml
  */
@@ -41,20 +48,32 @@ const SAMPLES_DIR = join(
 
 interface SourceSpec {
   certType: CertType;
-  /** Absolute path to the v1.1 sample-set YAML for this series. */
+  /** Absolute path to the sample-set YAML for this series. */
   path: string;
+  /** Rubric standard version stored on the seeded rows. */
+  rubricVersion: '1.1' | '2.0';
 }
+
+/**
+ * 시험 표준 v2.0: the AXIS series ships a re-authored v2.0 sample set
+ * (오답 의무화·라벨 중립화·근거 2점·게이트 — new_doc_l3). AXIS-C / AXIS-H
+ * v2.0 sets are not yet authored, so those series stay on their v1.1 samples
+ * (the grader keys per-criterion scoring off the rubric wrapper, so mixed
+ * versions coexist safely).
+ */
+const V2_SAMPLES_PATH = join(
+  REPO_ROOT,
+  'new_doc_l3',
+  '3_AXIS L3',
+  '2_실습형',
+  'AXIS_L3_실습형_샘플문항_세트_v2_0.yaml',
+);
 
 const SOURCES: SourceSpec[] = [
   {
     certType: CertType.AXIS,
-    path: join(
-      SAMPLES_DIR,
-      '1_AXIS',
-      '3_AXIS L3',
-      'AXIS_L3_실습형_출제자료_패키지',
-      'AXIS_L3_실습형_샘플문항_세트_v1_1.yaml',
-    ),
+    path: V2_SAMPLES_PATH,
+    rubricVersion: '2.0',
   },
   {
     certType: CertType.AXIS_C,
@@ -65,6 +84,7 @@ const SOURCES: SourceSpec[] = [
       'AXIS-C_L3_실습형_출제자료_패키지',
       'AXIS-C_L3_실습형_샘플문항_세트_v1_1.yaml',
     ),
+    rubricVersion: '1.1',
   },
   {
     certType: CertType.AXIS_H,
@@ -75,8 +95,42 @@ const SOURCES: SourceSpec[] = [
       'AXIS-H_L3_실습형_출제자료_패키지',
       'AXIS-H_L3_실습형_샘플문항_세트_v1_1.yaml',
     ),
+    rubricVersion: '1.1',
   },
 ];
+
+/**
+ * v2.0 per-criterion splits (루브릭 v2.1 템플릿 / 개발자 명세서 §3-2): the
+ * objective answer-key field → criterion points, plus the penalty-based
+ * 위험통제 criterion (현업적용형) and the generated-text criteria
+ * (지시설계형·분석검증형). Rationale (근거) is fixed at 2 pts in every type
+ * and read from the rubric itself.
+ */
+const V2_FIELD_POINTS: Record<CanonicalType, Record<string, number>> = {
+  // 핵심 판단 4 (tasks) / 자료·절차 2 = 금지 자료 1 + 검토 지점 1
+  현업적용형: { tasks: 4, excluded_materials: 1, review_point: 1 },
+  // 조건 추출·누락요소 식별 3
+  지시설계형: { elements: 3 },
+  // 문제 식별 4 / 우선수정 2
+  분석검증형: { issues: 4, first_action: 2 },
+  // 위험 식별 3 / 우선순위·즉시조치 3 / 대응조치 2
+  리스크판단형: { highest_risk: 3, immediate_action: 3, alternative: 2 },
+};
+
+const V2_RISK_CONTROL: Partial<Record<CanonicalType, { points: number; penaltyPerHit: number }>> = {
+  // 위험통제 2점: 기본 2점에서 금지 옵션 선택 1개당 −1 (하한 0, 부록 A)
+  현업적용형: { points: 2, penaltyPerHit: 1 },
+};
+
+const V2_GENERATED_CRITERIA: Partial<
+  Record<CanonicalType, Array<{ label: string; points: number; kind: string }>>
+> = {
+  지시설계형: [
+    { label: '지시 보완', points: 3, kind: 'prompt_quality' },
+    { label: '검증요청', points: 2, kind: 'verification_request' },
+  ],
+  분석검증형: [{ label: '검증절차', points: 2, kind: 'prompt_quality' }],
+};
 
 /** Canonical practice types — the spec mandates exactly one per L3 exam set. */
 const CANONICAL_TYPES = [
@@ -208,7 +262,7 @@ async function seedSeries(spec: SourceSpec): Promise<SeededRow[]> {
       taskInstruction.length > 50 ? taskInstruction.slice(0, 50) + '…' : taskInstruction || itemId
     }`;
 
-    const rubricPayload = {
+    const rubricPayload: Record<string, unknown> = {
       itemId,
       practiceType: taskType,
       evaluationArea: item.evaluation_area ?? null,
@@ -220,7 +274,33 @@ async function seedSeries(spec: SourceSpec): Promise<SeededRow[]> {
       rubric: item.rubric ?? item.rubric_10_points ?? null,
       riskFlags: item.risk_flags ?? null,
       expertReviewTrigger: item.expert_review_trigger ?? null,
+      rubric_version: spec.rubricVersion,
     };
+
+    if (spec.rubricVersion === '2.0') {
+      // v2.0 answer keys nest the objective fields under `required_choices`
+      // ({tasks: [T1,T2], …}); flatten them to the grader's field map and
+      // surface the reference prose (key_reason / example prompt) alongside.
+      const rawKey = (item.answer_key ?? {}) as Record<string, unknown>;
+      const required = (rawKey.required_choices ?? {}) as Record<string, unknown>;
+      rubricPayload.answerKey = {
+        ...required,
+        ...(typeof rawKey.key_reason === 'string' ? { key_reason: rawKey.key_reason } : {}),
+        ...(typeof rawKey.example_prompt === 'string'
+          ? { example_prompt: rawKey.example_prompt }
+          : typeof rawKey.example_revision_prompt === 'string'
+            ? { example_prompt: rawKey.example_revision_prompt }
+            : {}),
+      };
+      rubricPayload.mustNotChoose = Array.isArray(rawKey.must_not_choose)
+        ? rawKey.must_not_choose
+        : [];
+      rubricPayload.fieldPoints = V2_FIELD_POINTS[taskType];
+      rubricPayload.riskControl = V2_RISK_CONTROL[taskType] ?? null;
+      rubricPayload.generatedCriteria = V2_GENERATED_CRITERIA[taskType] ?? null;
+      rubricPayload.partialCreditRule = rawKey.partial_credit_rule ?? null;
+      rubricPayload.priorityRationale = rawKey.priority_rationale ?? null;
+    }
 
     await prisma.taskTemplate.create({
       data: {

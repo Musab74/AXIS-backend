@@ -7,6 +7,9 @@ import { EssayGradingService } from './essay-grading.service';
 import { CodeGradingService } from './code-grading.service';
 import { L3PracticalGraderService } from './l3-practical-grader.service';
 import { L3AutoFinalizeService } from './l3-autofinalize.service';
+import { BaselineGateService } from './baseline-gate.service';
+import { SessionAggregateController } from './session-aggregate.controller';
+import { SessionAggregateService } from './session-aggregate.service';
 import { ClaudeEssayGraderService } from '../../integrations/anthropic/claude-essay-grader.service';
 import { PrismaService } from '../../common/prisma.service';
 import { AdminMonitorModule } from '../adminMonitor/admin-monitor.module';
@@ -17,7 +20,7 @@ import { NcObjectStorageModule } from '../../integrations/ncObjectStorage/nc-obj
 
 @Module({
   imports: [AdminMonitorModule, AdminNotificationsModule, CertificatesModule, CbtSessionsModule, NcObjectStorageModule],
-  controllers: [GradingController, AdminGradingController],
+  controllers: [GradingController, AdminGradingController, SessionAggregateController],
   providers: [
     GradingService,
     AdminGradingService,
@@ -25,9 +28,11 @@ import { NcObjectStorageModule } from '../../integrations/ncObjectStorage/nc-obj
     CodeGradingService,
     L3PracticalGraderService,
     L3AutoFinalizeService,
+    SessionAggregateService,
+    BaselineGateService,
     ClaudeEssayGraderService,
     PrismaService,
   ],
-  exports: [EssayGradingService, L3PracticalGraderService],
+  exports: [EssayGradingService, L3PracticalGraderService, SessionAggregateService, BaselineGateService],
 })
 export class GradingModule {}

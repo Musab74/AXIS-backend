@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { ExamPart, ExamSessionStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
-import { getTiming } from '../cbtSessions/exam-spec';
+import { getTiming, toSpecVersion } from '../cbtSessions/exam-spec';
 
 /**
  * Shared MCQ (written-section) scoring used by BOTH:
@@ -18,6 +18,8 @@ export interface WrittenAnswerLike {
   questionId: string;
   selectedChoice: string | null;
   contentSnapshot: Prisma.JsonValue | null;
+  /** v2.0 (WP10) 사전검증 slot — recorded for statistics, scored as 0. */
+  isPretest?: boolean;
 }
 
 export interface WrittenBankRow {
@@ -60,6 +62,14 @@ export function computeWrittenScoring(
     const snapshot = a.contentSnapshot as { correctAnswerKey?: string } | null;
     const correctKey = snapshot?.correctAnswerKey ?? q.correctAnswer;
     const correct = a.selectedChoice != null && a.selectedChoice === correctKey;
+
+    // v2.0 (WP10) pretest slots: correctness recorded for item statistics but
+    // 0 points earned, and the item is excluded from the written total and
+    // subject aggregates so it never touches pass/fail or gate math.
+    if (a.isPretest) {
+      perAnswer.push({ answerId: a.id, correct, earned: 0 });
+      continue;
+    }
 
     const earned = correct ? q.points : 0;
     writtenEarned += earned;
@@ -109,7 +119,11 @@ export async function gradeTerminatedWrittenSection(
     });
     const bankById = new Map(bank.map((q) => [q.id, q]));
     const scored = computeWrittenScoring(session.answers, bankById);
-    const subjectFailPct = getTiming(session.certType, session.level).subjectFailPct;
+    const subjectFailPct = getTiming(
+      session.certType,
+      session.level,
+      toSpecVersion(session.specVersion),
+    ).subjectFailPct;
 
     await prisma.$transaction(async (tx) => {
       for (const pa of scored.perAnswer) {

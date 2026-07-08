@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { EssayAnswer, Prisma, TaskTemplate } from '@prisma/client';
+import { CertLevel, DecisionStatus, EssayAnswer, ExamPart, Prisma, TaskTemplate } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import {
   ClaudeEssayGraderService,
@@ -7,14 +7,17 @@ import {
   EssayGradeRiskFlag,
   EssayGradeTask,
 } from '../../integrations/anthropic/claude-essay-grader.service';
-import { getScoring, getSectionFloorPct } from '../cbtSessions/exam-spec';
+import { getScoring, getSectionFloorPct, toSpecVersion } from '../cbtSessions/exam-spec';
 import { parseRubric, parseL3Reference, RubricCriterion } from './rubric';
-import { GRADING_CONFIG } from './grading-config';
+import { AI_GRADING_PROMPT_VERSION, GRADING_CONFIG } from './grading-config';
 import { CodeGradingService } from './code-grading.service';
 import { scanForbiddenPatterns } from './forbidden-patterns';
 import { L3PracticalGraderService, parseL3Submission } from './l3-practical-grader.service';
 import type { L3GradeResult, L3Submission } from './l3-practical-grader.types';
+import { BaselineGateService, BaselineGateStatus } from './baseline-gate.service';
+import { sessionReviewV2, TaskScoreV2 } from './review-bands';
 import { computeMandatoryReview, sessionReviewFromTaskPcts } from './review-triggers';
+import { SessionAggregateService } from './session-aggregate.service';
 import { gradeTerminatedWrittenSection } from './written-scoring';
 import {
   EssayGradePersist,
@@ -73,7 +76,16 @@ export class EssayGradingService {
     private readonly grader: ClaudeEssayGraderService,
     private readonly codeGrading: CodeGradingService,
     private readonly l3Grader: L3PracticalGraderService,
+    private readonly aggregates: SessionAggregateService,
+    private readonly baselineGate: BaselineGateService,
   ) {}
+
+  /** Rubric version for the audit trail: seed `rubric_version` else TaskTemplate.version. */
+  static rubricVersionOf(tpl: TaskTemplate): string {
+    const wrapper = tpl.rubric as { rubric_version?: unknown } | null;
+    const fromRubric = wrapper && typeof wrapper === 'object' ? wrapper.rubric_version : null;
+    return typeof fromRubric === 'string' && fromRubric.trim() ? fromRubric.trim() : `v${tpl.version}`;
+  }
 
   /** Build the Claude grader's task input from a TaskTemplate (rubric → weighted criteria). */
   static toGradeTask(tpl: TaskTemplate): EssayGradeTask {
@@ -98,6 +110,7 @@ export class EssayGradingService {
       practiceType: l3?.practiceType ?? null,
       responseFormat: l3?.responseFormat ?? null,
       answerKey: l3?.answerKey ?? null,
+      rubricVersion: EssayGradingService.rubricVersionOf(tpl),
     };
   }
 
@@ -132,7 +145,27 @@ export class EssayGradingService {
 
     const mandatoryReview =
       computeMandatoryReview(outcomes) || this.sessionLevelReview(session, tasks, outcomes);
-    await this.prisma.examSession.update({ where: { id: sessionId }, data: { mandatoryReview } });
+
+    // v2.0 decision state machine (WP4): prescore completion stages the
+    // session as PROVISIONAL, or IN_REVIEW when any review trigger fired.
+    // Never regress a decision a human already locked (confirmed/invalidated).
+    const locked =
+      session.decisionStatus === DecisionStatus.CONFIRMED_PASS ||
+      session.decisionStatus === DecisionStatus.CONFIRMED_FAIL ||
+      session.decisionStatus === DecisionStatus.INVALIDATED;
+    const decisionStatus =
+      toSpecVersion(session.specVersion) === '2.0' && !locked
+        ? mandatoryReview
+          ? DecisionStatus.IN_REVIEW
+          : DecisionStatus.PROVISIONAL
+        : undefined;
+    await this.prisma.examSession.update({
+      where: { id: sessionId },
+      data: { mandatoryReview, ...(decisionStatus ? { decisionStatus } : {}) },
+    });
+
+    // WP7: prescore completion is an aggregation point (no-op for v1.1).
+    this.aggregates.rebuildSafely(sessionId, 'ai_prescore');
 
     this.logger.log(
       JSON.stringify({
@@ -152,9 +185,11 @@ export class EssayGradingService {
   }
 
   /**
-   * Session-level numeric triggers (total within the pass boundary band, or a
-   * practical section near/below its floor). Only evaluable once every task
-   * carries an AI pct; per-task triggers still apply on partial prescores.
+   * Session-level numeric triggers. Only evaluable once every task carries an
+   * AI pct; per-task triggers still apply on partial prescores.
+   *   v1.1: generic ±band window around passTotal / section floors.
+   *   v2.0: explicit per-level boundary bands + hard-cut misses + per-task
+   *   flags (review-bands.ts) on the point scales of the aggregate schemas.
    */
   private sessionLevelReview(
     session: SessionWithAnswers,
@@ -163,12 +198,48 @@ export class EssayGradingService {
   ): boolean {
     if (outcomes.length === 0 || outcomes.some((o) => !o.scored || o.pct == null)) return false;
     const pctByTask = new Map(outcomes.map((o) => [o.taskId, o.pct ?? 0]));
-    return sessionReviewFromTaskPcts(
-      getScoring(session.certType, session.level),
-      session.writtenScore ?? 0,
-      tasks,
-      pctByTask,
+    const specVersion = toSpecVersion(session.specVersion);
+    const scoring = getScoring(session.certType, session.level, specVersion);
+    if (specVersion !== '2.0') {
+      return sessionReviewFromTaskPcts(scoring, session.writtenScore ?? 0, tasks, pctByTask);
+    }
+
+    // v2.0: rebuild the point-scale scores the aggregate schemas use. The
+    // written section's weight is its point max (60/30/25); practical points
+    // sum the raw task maxes with the AI pct applied.
+    const writtenWeight = scoring.sections.find((s) => s.part === ExamPart.WRITTEN)?.weight ?? 0;
+    const objective = ((session.writtenScore ?? 0) / 100) * writtenWeight;
+    const taskScores: TaskScoreV2[] = tasks.map((t) => {
+      const l3 = parseL3Reference(t.rubric);
+      const practiceType = (l3?.practiceType ?? t.taskType ?? '').replace(/[\s·]/g, '');
+      return {
+        key: t.id,
+        score: ((pctByTask.get(t.id) ?? 0) / 100) * t.points,
+        max: t.points,
+        isRiskJudgementType: practiceType.includes('리스크판단'),
+      };
+    });
+    // L1: Part B(DELIVERABLE) is the "practice" gate section; Part C(ESSAY) has
+    // no hard cut but keeps its <12 review trigger. L2/L3: PRACTICAL.
+    const partOf = (part: ExamPart) =>
+      tasks.filter((t) => t.part === part).reduce(
+        (acc, t) => acc + ((pctByTask.get(t.id) ?? 0) / 100) * t.points,
+        0,
+      );
+    const isL1 = session.level === 'L1';
+    const practice = isL1 ? partOf(ExamPart.DELIVERABLE) : partOf(ExamPart.PRACTICAL);
+    const partC = isL1 ? partOf(ExamPart.ESSAY) : undefined;
+    const total = Math.round(
+      objective + practice + (partC ?? 0),
     );
+    const review = sessionReviewV2(session.level, {
+      total,
+      objective,
+      practice,
+      partC,
+      taskScores,
+    });
+    return review.humanReviewRequired;
   }
 
   /** Route one answer to the right grader per session level + task part. */
@@ -243,7 +314,15 @@ export class EssayGradingService {
     let confidence = 0.9; // deterministic answer-key match
     let rationaleLowConf = false;
 
-    if (base.needsClaudeRationaleAssist && this.grader.isConfigured()) {
+    // WP8 baseline gate: the L3 selection auto-score is deterministic (AI
+    // 미개입) and stays; the AI-assisted share (Claude rationale assist) only
+    // runs when the baseline passed, and shadow mode routes to the expert queue.
+    const gate = await this.baselineGate.status(
+      session.level,
+      parseL3Reference(tpl.rubric)?.practiceType ?? tpl.taskType,
+      AI_GRADING_PROMPT_VERSION.L3,
+    );
+    if (base.needsClaudeRationaleAssist && this.grader.isConfigured() && gate.live) {
       const assist = await this.assistRationale(tpl, ans, base, criteria);
       if (assist && !assist.degraded) {
         final = mergeRationale(base, assist, maxTotal);
@@ -253,7 +332,14 @@ export class EssayGradingService {
       }
     }
 
-    await this.persistResult(ans, l3ToPersist(final, aiModel, confidence));
+    await this.persistResult(
+      ans,
+      l3ToPersist(final, aiModel, confidence, {
+        promptVersion: AI_GRADING_PROMPT_VERSION.L3,
+        rubricVersion: EssayGradingService.rubricVersionOf(tpl),
+      }),
+      gate.live,
+    );
     this.logGraded('l3_answer_key', tpl.id, session.id);
     return {
       taskId: tpl.id,
@@ -261,8 +347,14 @@ export class EssayGradingService {
       scored: true,
       pct: final.pct,
       riskFlags: final.riskFlags.length,
-      forceReview: final.needsExpertReview || rationaleLowConf,
-      floorPct: getSectionFloorPct(session.certType, session.level, tpl.part),
+      // Shadow mode (WP8): every AI-touched task goes to the expert queue.
+      forceReview: final.needsExpertReview || rationaleLowConf || !gate.live,
+      floorPct: getSectionFloorPct(
+        session.certType,
+        session.level,
+        tpl.part,
+        toSpecVersion(session.specVersion),
+      ),
     };
   }
 
@@ -288,6 +380,7 @@ export class EssayGradingService {
       { contentText: ans.contentText, aiChatLog: ans.aiChatLog },
       tpl.part,
       tpl.certType,
+      CertLevel.L3,
     );
   }
 
@@ -302,8 +395,22 @@ export class EssayGradingService {
     const executionSummary = includeExecutionSummary
       ? buildCodeExecutionSummary(session, tpl.id, ans.contentText)
       : null;
+    // WP8 baseline gate: criteria that failed the per-criterion baseline are
+    // excluded from AI scoring (expert direct scoring); without a passed gate
+    // the whole call runs in shadow mode.
+    const levelKey = session.level as 'L1' | 'L2' | 'L3';
+    const gate = await this.baselineGate.status(
+      session.level,
+      parseL3Reference(tpl.rubric)?.practiceType ?? tpl.taskType,
+      AI_GRADING_PROMPT_VERSION[levelKey],
+    );
+    const task = EssayGradingService.toGradeTask(tpl);
+    const gradedTask =
+      gate.excludedCriteria.length > 0
+        ? { ...task, criteria: task.criteria.filter((c) => !gate.excludedCriteria.some((x) => c.label.includes(x))) }
+        : task;
     const raw = await this.grader.grade(
-      EssayGradingService.toGradeTask(tpl),
+      gradedTask,
       {
         contentText: ans.contentText,
         aiChatLog: includeChatLog ? ans.aiChatLog : undefined,
@@ -311,15 +418,29 @@ export class EssayGradingService {
       },
       tpl.part,
       tpl.certType,
+      session.level,
     );
     if (raw.degraded) return { taskId: tpl.id, title: tpl.title, scored: false };
 
     const result: EssayGradeResult = extraRiskFlags.length
       ? { ...raw, riskFlags: [...extraRiskFlags, ...raw.riskFlags] }
       : raw;
-    await this.persistResult(ans, claudeToPersist(result));
+    await this.persistResult(
+      ans,
+      claudeToPersist(result, EssayGradingService.rubricVersionOf(tpl)),
+      gate.live,
+    );
     this.logGraded('claude_rubric', tpl.id, session.id);
-    return this.outcomeFromResult(session, tpl, result, false);
+    // v2.0 contract triggers: a nominated gate, an injection suspicion, a
+    // critical-fail candidate, shadow mode, or an AI-excluded criterion always
+    // routes the session to expert review.
+    const contractReview =
+      result.gate.triggered ||
+      result.injectionSuspected ||
+      result.criticalFailCandidates.length > 0 ||
+      !gate.live ||
+      gate.excludedCriteria.length > 0;
+    return this.outcomeFromResult(session, tpl, result, contractReview);
   }
 
   private outcomeFromResult(
@@ -337,7 +458,12 @@ export class EssayGradingService {
       confidence: result.confidence,
       riskFlags: result.riskFlags.length,
       forceReview,
-      floorPct: getSectionFloorPct(session.certType, session.level, tpl.part),
+      floorPct: getSectionFloorPct(
+        session.certType,
+        session.level,
+        tpl.part,
+        toSpecVersion(session.specVersion),
+      ),
     };
   }
 
@@ -345,13 +471,19 @@ export class EssayGradingService {
     this.logger.log(JSON.stringify({ msg: 'task_graded', strategy, taskId, sessionId }));
   }
 
-  private async persistResult(ans: EssayAnswer, p: EssayGradePersist): Promise<void> {
+  private async persistResult(
+    ans: EssayAnswer,
+    p: EssayGradePersist,
+    prefillEarned = true,
+  ): Promise<void> {
     await this.prisma.essayAnswer.update({
       where: { id: ans.id },
       data: {
         aiPreScore: p.pct,
-        // Pre-fill raw points, but never clobber an expert-finalized value on re-run.
-        ...(ans.expertScore == null ? { earnedPoints: p.earnedPoints } : {}),
+        // Pre-fill raw points, but never clobber an expert-finalized value on
+        // re-run — and never prefill in baseline SHADOW mode (WP8: AI scores
+        // are stored as reference only until the baseline passes).
+        ...(ans.expertScore == null && prefillEarned ? { earnedPoints: p.earnedPoints } : {}),
         aiRationale: p.rationale,
         aiCriterionScores: p.criterionScores as object,
         aiRiskFlags: p.riskFlags as object,
@@ -361,6 +493,12 @@ export class EssayGradingService {
         aiPromptHash: p.promptHash,
         aiLatencyMs: p.latencyMs,
         aiScoredAt: new Date(),
+        // v2.0 AI contract (WP6)
+        aiGate: (p.gate ?? undefined) as object | undefined,
+        aiCriticalFails: (p.criticalFails ?? undefined) as object | undefined,
+        aiInjectionSuspected: p.injectionSuspected,
+        aiPromptVersion: p.promptVersion,
+        aiRubricVersion: p.rubricVersion,
       },
     });
   }

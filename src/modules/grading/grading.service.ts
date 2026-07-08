@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ExamPart, ExamSessionStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
-import { getTiming } from '../cbtSessions/exam-spec';
+import { getTiming, toSpecVersion } from '../cbtSessions/exam-spec';
 import { AdminMonitorGateway } from '../adminMonitor/admin-monitor.gateway';
 import { AdminNotificationsService } from '../adminNotifications/admin-notifications.service';
 import { ExamSessionPauseService } from '../adminMonitor/exam-session-pause.service';
@@ -103,7 +103,8 @@ export class GradingService {
     }
 
     await this.prisma.gradingResult.deleteMany({ where: { sessionId } });
-    const subjectFailPct = getTiming(session.certType, session.level).subjectFailPct;
+    const specVersion = toSpecVersion(session.specVersion);
+    const subjectFailPct = getTiming(session.certType, session.level, specVersion).subjectFailPct;
     let anySubjectFailed = false;
     const gradingRows: Prisma.GradingResultCreateManyInput[] = [];
     for (const [idx, agg] of subjectAgg) {
@@ -141,7 +142,7 @@ export class GradingService {
 
     await this.prisma.gradingResult.createMany({ data: gradingRows });
 
-    const timing = getTiming(session.certType, session.level);
+    const timing = getTiming(session.certType, session.level, specVersion);
 
     if (hasPractical) {
       // Baseline: SUBMITTED (not GRADED). L1/L2 pass/fail is decided at finalize

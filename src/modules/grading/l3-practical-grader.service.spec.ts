@@ -154,7 +154,7 @@ describe('gradeL3Practical — expert-review triggers', () => {
     expect(r.riskFlags.map((f) => f.code)).toContain('risk_item_low_score');
   });
 
-  it('raises a HIGH PII flag when the rationale leaks personal data', () => {
+  it('raises a critical PII flag when the rationale leaks personal data', () => {
     const sub = parseL3Submission(
       JSON.stringify({
         highest_risk: '개인정보 외부 입력',
@@ -163,8 +163,12 @@ describe('gradeL3Practical — expert-review triggers', () => {
       }),
     )!;
     const r = grader.gradeL3Practical(리스크판단형, sub);
-    const pii = r.riskFlags.find((f) => f.code === 'phone_number');
-    expect(pii?.severity).toBe('HIGH');
+    // v2.0 (WP6): PII regex hits map onto the L3 controlled-vocabulary tag
+    // '개인정보 입력' with SYSTEM-side severity (critical); the matched regex
+    // pattern code stays in the detail for the reviewer.
+    const pii = r.riskFlags.find((f) => f.code === '개인정보 입력');
+    expect(pii?.severity).toBe('CRITICAL');
+    expect(pii?.detail).toContain('phone_number');
     expect(r.needsExpertReview).toBe(true);
   });
 
@@ -181,6 +185,26 @@ describe('gradeL3Practical — expert-review triggers', () => {
     const r = grader.gradeL3Practical(현업적용형, sub);
     expect(r.riskFlags.map((f) => f.code)).toContain('rationale_contradiction');
     expect(r.needsExpertReview).toBe(true);
+    // v2.0 (WP6): the contradiction heuristic IS the deterministic arm of the
+    // 선택-근거 일치 게이트 — it nominates, the expert confirms the zeroing.
+    expect(r.gate.triggered).toBe(true);
+    expect(r.gate.rule).toBe('선택-근거 일치 게이트');
+    expect(r.gate.contradiction).toBeTruthy();
+  });
+
+  it('leaves the gate untriggered on a coherent answer', () => {
+    const sub = parseL3Submission(
+      JSON.stringify({
+        ai_usable_tasks: ['보도자료 초안 작성', '회의록 요약'],
+        human_review_points: ['수치 검증', '법적 표현 검토'],
+        must_exclude_input: '고객 개인정보가 포함된 원본 명단',
+        short_reason:
+          '고객 개인정보가 포함된 명단은 입력에서 제외하고, 보도자료와 회의록 요약처럼 공개 가능한 자료만 AI에 맡기는 것이 안전하기 때문이다.',
+      }),
+    )!;
+    const r = grader.gradeL3Practical(현업적용형, sub);
+    expect(r.gate.triggered).toBe(false);
+    expect(r.gate.contradiction).toBeNull();
   });
 });
 
@@ -209,5 +233,129 @@ describe('gradeL3Practical — Claude rationale assist', () => {
     )!;
     const r = grader.gradeL3Practical(task, sub);
     expect(r.needsClaudeRationaleAssist).toBe(true);
+  });
+});
+
+/**
+ * v2.0 (WP9) 루브릭 v2.1 정렬: per-criterion splits via `fieldPoints`,
+ * penalty-based 위험통제, generated-text criteria, must-not-choose 감점.
+ * Mirrors 실습 1 (현업적용형 4/2/2/2) and 실습 2 (지시설계형 3/3/2/2) of
+ * AXIS_L3_실습형_샘플문항_세트_v2_0.yaml.
+ */
+describe('gradeL3Practical — v2.0 per-criterion splits (WP9)', () => {
+  const 현업적용형V2: L3GradeTask = {
+    points: 10,
+    rubric: {
+      practiceType: '현업적용형',
+      rubric_version: '2.0',
+      answerKey: {
+        tasks: ['T1', 'T2'],
+        excluded_materials: ['M2', 'M3'],
+        review_point: ['R1'],
+        key_reason:
+          '게시·발송 완료 자료와 무기명 집계 수치는 입력 가능하고, 작성 중 평가 메모와 연락처 목록은 지침상 금지 대상이다. 최종 사실 확인은 사람의 책임이다.',
+      },
+      fieldPoints: { tasks: 4, excluded_materials: 1, review_point: 1 },
+      riskControl: { points: 2, penaltyPerHit: 1 },
+      mustNotChoose: ['T3', 'T4', 'T5'],
+      rubric: [
+        { criterion: '핵심 판단', points: 4, description: '맡길 작업의 정확한 구분' },
+        { criterion: '자료·절차', points: 2, description: '금지 자료·검토 지점 선택' },
+        { criterion: '위험통제', points: 2, description: '금지 옵션 미선택' },
+        { criterion: '근거', points: 2, description: '지침 인용 2점 / 일반론 1점 / 모순 0점+게이트' },
+      ],
+    },
+  };
+
+  const PERFECT_REASON =
+    '게시 완료된 업무 요약과 무기명 집계 수치는 입력 가능하고, 작성 중 평가 메모와 연락처 목록은 지침상 금지 대상이므로 제외했으며 최종 사실 확인은 사람의 책임이다.';
+
+  it('scores objective fields by their per-criterion points (4/1/1), not an even split', () => {
+    const sub = parseL3Submission(
+      JSON.stringify({
+        tasks: ['T1', 'T2'],
+        excluded_materials: ['M2', 'M3'],
+        review_point: ['R1'],
+        short_reason: PERFECT_REASON,
+      }),
+    )!;
+    const r = grader.gradeL3Practical(현업적용형V2, sub);
+    const byKey = new Map(r.breakdown.details.map((d) => [d.key, d]));
+    expect(byKey.get('tasks')?.points).toBe(4);
+    expect(byKey.get('tasks')?.earned).toBe(4);
+    expect(byKey.get('excluded_materials')?.points).toBe(1);
+    expect(byKey.get('review_point')?.points).toBe(1);
+    // 위험통제: no banned option selected → full 2.
+    expect(byKey.get('risk_control')?.earned).toBe(2);
+    // Rationale is fixed at 2 pts in every v2.0 type.
+    expect(byKey.get('rationale')?.points).toBe(2);
+    expect(r.earnedPoints).toBeGreaterThanOrEqual(9); // 8 auto + rationale ≥1
+  });
+
+  it('deducts the 위험통제 penalty and flags must-not-choose selections (dev spec T4)', () => {
+    const sub = parseL3Submission(
+      JSON.stringify({
+        tasks: ['T1', 'T3'], // T3 is banned
+        excluded_materials: ['M2', 'M3'],
+        review_point: ['R1'],
+        short_reason: PERFECT_REASON,
+      }),
+    )!;
+    const r = grader.gradeL3Practical(현업적용형V2, sub);
+    const rc = r.breakdown.details.find((d) => d.key === 'risk_control');
+    expect(rc?.earned).toBe(1); // 2 − 1 hit
+    expect(r.riskFlags.map((f) => f.code)).toContain('must_not_choose_selected');
+    expect(r.needsExpertReview).toBe(true);
+  });
+
+  it('scores generated criteria: 지시 보완 by example-prompt coverage, 검증요청 by pattern', () => {
+    const 지시설계형V2: L3GradeTask = {
+      points: 10,
+      rubric: {
+        practiceType: '지시설계형',
+        rubric_version: '2.0',
+        answerKey: {
+          elements: ['E1', 'E2', 'E3', 'E4', 'E5'],
+          example_prompt:
+            '5년 거래한 구매팀 김 부장님께 보낼 납기 3일 지연 사과 메일을 작성해줘. 행사 일정 차질 사과와 재발 방지 약속을 포함하고 분량은 간결하게. 과장 표현이 있으면 표시해줘.',
+          key_reason: '요청문의 조건은 상사 메시지와 고객 메일이라는 원자료에서 추출해야 한다.',
+        },
+        fieldPoints: { elements: 3 },
+        mustNotChoose: ['E6', 'E7', 'E8'],
+        generatedCriteria: [
+          { label: '지시 보완', points: 3, kind: 'prompt_quality' },
+          { label: '검증요청', points: 2, kind: 'verification_request' },
+        ],
+        rubric: [
+          { criterion: '조건 추출·누락요소 식별', points: 3, description: '원문 근거 요소 추출' },
+          { criterion: '지시 보완', points: 3, description: '실사용 가능 요청문' },
+          { criterion: '검증요청', points: 2, description: '검증 요청 포함' },
+          { criterion: '근거', points: 2, description: '원문 인용 2점 / 일반론 1점' },
+        ],
+      },
+    };
+    const sub = parseL3Submission(
+      JSON.stringify({
+        elements: ['E1', 'E2', 'E3', 'E4', 'E5'],
+        write_prompt:
+          '5년 거래한 구매팀 김 부장님께 납기 3일 지연 사과 메일을 간결하게 작성해줘. 행사 일정 차질을 사과하고 재발 방지 조치를 약속하는 내용을 포함하고, 과장되거나 책임 회피하는 표현이 있으면 표시해줘.',
+        short_reason:
+          '상사 메시지와 고객 메일 원문에 있는 지연 기간, 행사 차질, 거래 관계, 분량, 재발 방지 조건만 반영하고 원문에 없는 보상 제안은 지어 넣지 않았다.',
+      }),
+    )!;
+    const r = grader.gradeL3Practical(지시설계형V2, sub);
+    const byKey = new Map(r.breakdown.details.map((d) => [d.key, d]));
+    expect(byKey.get('elements')?.points).toBe(3);
+    expect(byKey.get('지시 보완')?.kind).toBe('generated');
+    expect(byKey.get('지시 보완')?.earned).toBeGreaterThan(1.5); // strong prompt coverage
+    expect(byKey.get('검증요청')?.earned).toBe(2); // 표시해줘 → verification request present
+    expect(r.earnedPoints).toBeGreaterThanOrEqual(8);
+  });
+
+  it('parseL3RubricPayload exposes the v2.0 wrapper fields', () => {
+    const p = parseL3RubricPayload(현업적용형V2.rubric);
+    expect(p.fieldPoints).toEqual({ tasks: 4, excluded_materials: 1, review_point: 1 });
+    expect(p.riskControl).toEqual({ points: 2, penaltyPerHit: 1 });
+    expect(p.mustNotChoose).toEqual(['T3', 'T4', 'T5']);
   });
 });

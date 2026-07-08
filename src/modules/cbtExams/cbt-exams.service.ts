@@ -6,7 +6,7 @@ import { ExamSessionPauseService } from '../adminMonitor/exam-session-pause.serv
 import { MonitorHeartbeatService } from '../adminMonitor/monitor-heartbeat.service';
 import { assertIdentityVerifiedForSession } from '../cbtSessions/exam-identity-guard';
 import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
-import { getTiming } from '../cbtSessions/exam-spec';
+import { getTiming, toSpecVersion } from '../cbtSessions/exam-spec';
 
 @Injectable()
 export class CbtExamsService {
@@ -55,13 +55,15 @@ export class CbtExamsService {
         })
       : [];
 
-    const timing = getTiming(session.certType, session.level);
+    const specVersion = toSpecVersion(session.specVersion);
+    const timing = getTiming(session.certType, session.level, specVersion);
     return {
       session: {
         id: session.id,
         certType: session.certType,
         level: session.level,
         status: session.status,
+        specVersion,
         startedAt: session.startedAt,
         hardDeadline: session.hardDeadline,
         timing,

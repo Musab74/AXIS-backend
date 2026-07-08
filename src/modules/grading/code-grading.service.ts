@@ -6,6 +6,7 @@ import type {
   EssayGradeRiskFlag,
 } from '../../integrations/anthropic/claude-essay-grader.service';
 import type { GradingBand } from './grading-config';
+import { GATE_RULES } from './grading-config';
 import { scanForbiddenPatterns } from './forbidden-patterns';
 
 interface CodeTestCase {
@@ -128,12 +129,18 @@ export class CodeGradingService {
       band,
       // A mismatch (not all tests pass) must be seen by an expert per spec.
       riskFlags: [...staticFlags, ...testFlags],
+      // Deterministic execution — the v2.0 gate/critical-fail contract does
+      // not apply to Judge0 runs (no free text to contradict).
+      gate: { triggered: false, rule: GATE_RULES.L2, contradiction: null },
+      criticalFailCandidates: [],
+      injectionSuspected: false,
       // Deterministic execution — high confidence in the pass/fail counts, but
       // never a 1.0 (the expert still judges code quality / partial credit).
       confidence: allPassed ? 0.95 : 0.7,
       rationale: `Judge0 자동 채점: ${passed}/${total} 테스트 통과 (${pct}%). ${perCase.join(' · ')}`,
       model: MODEL_ID,
       promptHash: `judge0:${languageId}:${total}`,
+      promptVersion: 'judge0-autotest',
       latencyMs: Date.now() - t0,
       degraded: false,
     };

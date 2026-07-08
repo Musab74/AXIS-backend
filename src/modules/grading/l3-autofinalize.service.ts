@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ExamPart, ExamSessionStatus, Prisma, TaskTemplate } from '@prisma/client';
+import { DecisionStatus, ExamPart, ExamSessionStatus, Prisma, TaskTemplate } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
-import { computeWeightedResult, getScoring, getTiming } from '../cbtSessions/exam-spec';
+import {
+  computeWeightedResult,
+  getScoring,
+  getTiming,
+  toSpecVersion,
+} from '../cbtSessions/exam-spec';
 import { CertificatesService } from '../certificates/certificates.service';
 import { EssayGradingService } from './essay-grading.service';
+import { SessionAggregateService } from './session-aggregate.service';
 
 type SessionWithEssays = Prisma.ExamSessionGetPayload<{ include: { essayAnswers: true } }>;
 
@@ -11,26 +17,39 @@ type SessionWithEssays = Prisma.ExamSessionGetPayload<{ include: { essayAnswers:
 const PRESCORE_TIMEOUT_MS = 10_000;
 
 /**
- * POLICY FLAG — L3-with-practicals auto-finalize issues pass/fail and
- * certificates with no human touch when the AI first pass is confident
- * (mandatoryReview=false), which is an explicit exception to the "AI is not
- * the final grader" principle. Default 'true' preserves the current production
- * behavior; set L3_AUTO_FINALIZE=false to route every L3-with-practicals
- * session through the expert queue instead. Read at call time so flipping the
- * env var needs no restart. DO NOT change the default without a policy decision.
+ * POLICY FLAG — semantics depend on the session's exam-spec version:
+ *
+ *   v1.1 sessions (legacy): auto-finalize issues pass/fail and certificates
+ *   with no human touch when the AI first pass is confident
+ *   (mandatoryReview=false). Kept for in-flight sessions only.
+ *
+ *   v2.0 sessions: "auto-AGGREGATE to provisional" — a confident prescore
+ *   fully aggregates and stages the result (scores + per-task grading rows)
+ *   with decisionStatus=PROVISIONAL so admin confirmation is one click, but
+ *   it NEVER issues a certificate or marks the session GRADED. The final
+ *   decision is always locked by a human (개발자 통합명세서 v2.0:
+ *   final_decision_owner = human_exam_admin_or_review_panel); certificates
+ *   are issued only on CONFIRMED_PASS (AdminGradingService.confirmDecision).
+ *
+ * Set L3_AUTO_FINALIZE=false to skip staging and route every
+ * L3-with-practicals session through the expert queue instead. Read at call
+ * time so flipping the env var needs no restart.
  */
 function isL3AutoFinalizeEnabled(): boolean {
   return (process.env.L3_AUTO_FINALIZE || 'true').toLowerCase() === 'true';
 }
 
 /**
- * L3-with-practicals auto-finalize on submit (운영기획서 §10).
+ * L3-with-practicals prescore aggregation on submit.
  *
  * After the MCQ auto-grade, the submit path calls this to await the AI prescore
- * (timeout-safe) and, when the AI is confident (mandatoryReview=false) and every
- * practical task was scored, GRADE the session in the same request using the
- * shared weighted-100 math. Otherwise the session stays SUBMITTED for the expert
- * queue and the background prescore keeps running past the timeout.
+ * (timeout-safe). When the AI is confident (mandatoryReview=false) and every
+ * practical task was scored:
+ *   - v1.1 session → GRADED + certificate in the same request (legacy).
+ *   - v2.0 session → scores staged, decisionStatus=PROVISIONAL, session stays
+ *     SUBMITTED awaiting human confirmation.
+ * Otherwise the session stays SUBMITTED for the expert queue and the
+ * background prescore keeps running past the timeout.
  */
 @Injectable()
 export class L3AutoFinalizeService {
@@ -40,9 +59,10 @@ export class L3AutoFinalizeService {
     private readonly prisma: PrismaService,
     private readonly essayGrading: EssayGradingService,
     private readonly certificates: CertificatesService,
+    private readonly aggregates: SessionAggregateService,
   ) {}
 
-  /** Returns true iff the session was auto-finalized to GRADED in this request. */
+  /** Returns true iff the session was auto-finalized/staged in this request. */
   async tryFinalizeOnSubmit(
     sessionId: string,
     tasks: TaskTemplate[],
@@ -88,7 +108,11 @@ export class L3AutoFinalizeService {
       return false;
     }
 
-    await this.gradeGraded(session, tasks, writtenPct);
+    if (toSpecVersion(session.specVersion) === '2.0') {
+      await this.stageProvisional(session, tasks, writtenPct);
+    } else {
+      await this.gradeGraded(session, tasks, writtenPct);
+    }
     return true;
   }
 
@@ -112,11 +136,8 @@ export class L3AutoFinalizeService {
     return outcome;
   }
 
-  private async gradeGraded(
-    session: SessionWithEssays,
-    tasks: TaskTemplate[],
-    writtenPct: number,
-  ): Promise<void> {
+  /** Shared per-task aggregation used by both the legacy and v2.0 paths. */
+  private aggregate(session: SessionWithEssays, tasks: TaskTemplate[], writtenPct: number) {
     const earnedByTask = new Map(session.essayAnswers.map((a) => [a.taskId, a.earnedPoints ?? 0]));
     let earned = 0;
     let total = 0;
@@ -125,12 +146,36 @@ export class L3AutoFinalizeService {
       earned += earnedByTask.get(t.id) ?? 0;
     }
     const practicalPct = total > 0 ? Math.round((earned / total) * 100) : 0;
+    const specVersion = toSpecVersion(session.specVersion);
+    const scoring = getScoring(session.certType, session.level, specVersion);
+    const sectionPct = (part: ExamPart): number =>
+      part === ExamPart.WRITTEN ? writtenPct : practicalPct;
+    const weighted = computeWeightedResult(scoring, sectionPct);
+    const subjectFailPct = getTiming(session.certType, session.level, specVersion).subjectFailPct;
+    const gradingRows: Prisma.GradingResultCreateManyInput[] = tasks.map((t, idx) => {
+      const e = earnedByTask.get(t.id) ?? 0;
+      const pct = t.points > 0 ? Math.round((e / t.points) * 100) : 0;
+      return {
+        sessionId: session.id, part: t.part, subjectIndex: idx, subjectName: t.title,
+        earned: e, total: t.points, percentage: pct, subjectFailed: pct < subjectFailPct,
+      };
+    });
+    return { earnedByTask, practicalPct, scoring, sectionPct, weighted, gradingRows };
+  }
 
-    const scoring = getScoring(session.certType, session.level);
-    const sectionPct = (part: ExamPart): number => (part === ExamPart.WRITTEN ? writtenPct : practicalPct);
-    const { total: totalScore, passed, floorFailures } = computeWeightedResult(scoring, sectionPct);
-    const failReason = passed ? null : buildFailReason(scoring.passTotal, sectionPct, floorFailures, totalScore);
-    const subjectFailPct = getTiming(session.certType, session.level).subjectFailPct;
+  /**
+   * v2.0: aggregate and STAGE the result as provisional — scores + per-task
+   * grading rows persisted, decisionStatus=PROVISIONAL — but do NOT mark
+   * GRADED, do NOT set `passed`, and never issue a certificate here. The
+   * admin confirm endpoint (bulk-confirmable for clean passes) locks the
+   * decision and issues certificates.
+   */
+  private async stageProvisional(
+    session: SessionWithEssays,
+    tasks: TaskTemplate[],
+    writtenPct: number,
+  ): Promise<void> {
+    const { practicalPct, weighted, gradingRows } = this.aggregate(session, tasks, writtenPct);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.gradingResult.deleteMany({
@@ -139,15 +184,71 @@ export class L3AutoFinalizeService {
           part: { in: [ExamPart.PRACTICAL, ExamPart.DELIVERABLE, ExamPart.ESSAY] },
         },
       });
-      const rows: Prisma.GradingResultCreateManyInput[] = tasks.map((t, idx) => {
-        const e = earnedByTask.get(t.id) ?? 0;
-        const pct = t.points > 0 ? Math.round((e / t.points) * 100) : 0;
-        return {
-          sessionId: session.id, part: t.part, subjectIndex: idx, subjectName: t.title,
-          earned: e, total: t.points, percentage: pct, subjectFailed: pct < subjectFailPct,
-        };
+      if (gradingRows.length) await tx.gradingResult.createMany({ data: gradingRows });
+      await tx.examSession.update({
+        where: { id: session.id },
+        data: {
+          practicalScore: practicalPct,
+          totalScore: weighted.total,
+          // passed stays null — final pass/fail exists only after human confirm.
+          decisionStatus: DecisionStatus.PROVISIONAL,
+          failReason: '채점 완료 — 관리자 확정 대기 중 (provisional).',
+        },
       });
-      if (rows.length) await tx.gradingResult.createMany({ data: rows });
+      await tx.auditLog.create({
+        data: {
+          actorId: session.userId,
+          action: 'L3_PROVISIONAL_STAGED',
+          entityType: 'ExamSession',
+          entityId: session.id,
+          after: {
+            writtenPct,
+            practicalPct,
+            totalScore: weighted.total,
+            gateResults: weighted.gateResults,
+            failedGates: weighted.failedGates,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    });
+
+    // WP7: staging refreshes the aggregate with the staged scores.
+    this.aggregates.rebuildSafely(session.id, 'l3_provisional_staged');
+
+    this.logger.log(
+      JSON.stringify({
+        msg: 'l3_provisional_staged',
+        sessionId: session.id,
+        writtenPct,
+        practicalPct,
+        totalScore: weighted.total,
+        failedGates: weighted.failedGates,
+      }),
+    );
+  }
+
+  /** v1.1 legacy path: GRADED + certificate with no human touch. */
+  private async gradeGraded(
+    session: SessionWithEssays,
+    tasks: TaskTemplate[],
+    writtenPct: number,
+  ): Promise<void> {
+    const { practicalPct, scoring, sectionPct, weighted, gradingRows } = this.aggregate(
+      session,
+      tasks,
+      writtenPct,
+    );
+    const { total: totalScore, passed, floorFailures } = weighted;
+    const failReason = passed ? null : buildFailReason(scoring.passTotal, sectionPct, floorFailures, totalScore);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.gradingResult.deleteMany({
+        where: {
+          sessionId: session.id,
+          part: { in: [ExamPart.PRACTICAL, ExamPart.DELIVERABLE, ExamPart.ESSAY] },
+        },
+      });
+      if (gradingRows.length) await tx.gradingResult.createMany({ data: gradingRows });
       await tx.examSession.update({
         where: { id: session.id },
         data: { status: ExamSessionStatus.GRADED, practicalScore: practicalPct, totalScore, passed, failReason },

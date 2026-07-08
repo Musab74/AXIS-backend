@@ -427,8 +427,34 @@ model QuestionBank {
   createdBy     String?      @map("created_by")
   createdDate   DateTime?    @map("created_date")
 
+  // ── 시험 표준 v2.0 question-bank infrastructure (WP10) ─────────────────
+  /// Item lifecycle (Korean state strings — see ITEM_LIFECYCLE in
+  /// question-bank-v2.ts): 초안→1차검수→2차검수→사전검증→승인→비활성→폐기.
+  /// Only 승인 items are drawable as SCORED items; 사전검증 items may embed as
+  /// unscored pretest slots. NULL = legacy row (treated as 승인 alongside
+  /// `active` so pre-v2.0 banks keep working unchanged).
+  lifecycleStatus  String?   @map("lifecycle_status")
+  /// v2.0 문항유형 태그 (level blueprints, e.g. L3 현업적용형/분석·검증형…).
+  questionTypeTag  String?   @map("question_type_tag")
+  /// 업무맥락 통제어휘 태그 (L3 12종 / L2 10종 / L1 평가영역).
+  businessContextTag String? @map("business_context_tag")
+  /// 리스크 통제어휘 태그.
+  riskTag          String?   @map("risk_tag")
+  /// 앵커문항 (10–15% of forms, difficulty calibration; exposure tracked).
+  isAnchor         Boolean   @default(false) @map("is_anchor")
+  /// Times the item was drawn into a paper (anchor/exposure management).
+  exposureCount    Int       @default(0) @map("exposure_count")
+  /// 기술 전제 유형: 없음|최신성한계|메모리·컨텍스트|파일·데이터처리|계산정확성|기타.
+  techAssumptionType String? @map("tech_assumption_type")
+  /// 시효성 재검토 예정일 — 12 months standard, 6 when techAssumptionType ≠ 없음.
+  nextReviewAt     DateTime? @map("next_review_at")
+  /// 사전검증 통계 (target ≥100 responses, 정답률 난이도 밴드, 변별도 ≥0.20,
+  /// 오답 선택률 ≥5%): {responses, correctRate, discrimination, optionRates}.
+  pretestStats     Json?     @map("pretest_stats")
+
   @@unique([certType, level, no])
   @@index([certType, level, subjectIndex, active])
+  @@index([certType, level, lifecycleStatus])
   @@map("question_bank")
 }
 
@@ -468,9 +494,30 @@ model TaskTemplate {
   createdDate        DateTime? @map("created_date")
   isActive           Boolean   @default(true) @map("is_active")
 
+  // ── 시험 표준 v2.0 bank infrastructure (WP10) — mirrors QuestionBank ────
+  lifecycleStatus    String?   @map("lifecycle_status")
+  isAnchor           Boolean   @default(false) @map("is_anchor")
+  exposureCount      Int       @default(0) @map("exposure_count")
+  techAssumptionType String?   @map("tech_assumption_type")
+  nextReviewAt       DateTime? @map("next_review_at")
+  pretestStats       Json?     @map("pretest_stats")
+
   @@unique([certType, level, setNo, taskType])
   @@index([certType, level, part])
   @@map("task_templates")
+}
+
+/// v2.0 final-decision state machine (개발자 통합명세서 v2.0). The final
+/// pass/fail is ALWAYS locked by a human: AI/auto aggregation stages the
+/// session as PROVISIONAL, review triggers move it to IN_REVIEW, and only an
+/// admin/review panel confirms. Certificates are issued only on
+/// CONFIRMED_PASS. v1.1 sessions keep `decisionStatus = null` (legacy flow).
+enum DecisionStatus {
+  PROVISIONAL
+  IN_REVIEW
+  CONFIRMED_PASS
+  CONFIRMED_FAIL
+  INVALIDATED
 }
 
 model ExamSession {
@@ -481,6 +528,10 @@ model ExamSession {
   level           CertLevel
   attemptNo       Int               @default(1) @map("attempt_no")
   status          ExamSessionStatus @default(CREATED)
+  /// Exam standard version the session was created under ("1.1" | "2.0").
+  /// Every version-dependent rule (timing, hard cuts, review bands, decision
+  /// states) keys off this, so in-flight sessions keep their original rules.
+  specVersion     String            @default("1.1") @map("spec_version")
   paperSeed       String?           @map("paper_seed")
   startedAt       DateTime?         @map("started_at")
   hardDeadline    DateTime?         @map("hard_deadline")
@@ -496,6 +547,17 @@ model ExamSession {
   /// Set by AI prescore when a spec trigger fires (low confidence / risk flag /
   /// boundary score) so graders prioritize mandatory human scrutiny.
   mandatoryReview Boolean           @default(false) @map("mandatory_review")
+  /// v2.0 decision state (null for v1.1 sessions — legacy GRADED flow).
+  decisionStatus  DecisionStatus?   @map("decision_status")
+  confirmedAt     DateTime?         @map("confirmed_at")
+  /// User.id of the admin/review-panel member who locked the decision.
+  confirmedByRef  String?           @map("confirmed_by_ref")
+  /// L2 v2.0 audit: embedded-AI model+version fixed for the exam round.
+  embeddedAiVersion String?         @map("embedded_ai_version")
+  /// L2 v2.0 audit: reference to + SHA-256 hash of the full applicant↔embedded-AI
+  /// prompt log (captured in EssayAnswer.aiChatLog; hashed at submit).
+  promptLogRef    String?           @map("prompt_log_ref")
+  promptLogHash   String?           @map("prompt_log_hash")
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
 
@@ -507,6 +569,7 @@ model ExamSession {
 
   @@index([userId])
   @@index([status])
+  @@index([decisionStatus])
   @@map("exam_sessions")
 }
 
@@ -522,6 +585,10 @@ model Answer {
   version         Int      @default(0)
   isCorrect       Boolean? @map("is_correct")
   earnedPoints    Int?     @map("earned_points")
+  /// v2.0 (WP10) 사전검증(비채점) slot: consumes exam time, contributes 0 to
+  /// every score/gate, answer recorded for item statistics. Not marked to the
+  /// candidate.
+  isPretest       Boolean  @default(false) @map("is_pretest")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
@@ -558,6 +625,17 @@ model EssayAnswer {
   aiPromptHash      String?   @map("ai_prompt_hash")
   aiLatencyMs       Int?      @map("ai_latency_ms")
   aiScoredAt        DateTime? @map("ai_scored_at")
+
+  // v2.0 AI grading contract (WP6): per-level gate verdict
+  // ({triggered, rule, contradiction}), critical-fail pattern candidates
+  // (exact enum strings from the session-aggregate schemas), and the
+  // prompt-injection suspicion flag. Explicit version strings accompany the
+  // existing prompt hash for baseline/audit (WP8).
+  aiGate               Json?    @map("ai_gate")
+  aiCriticalFails      Json?    @map("ai_critical_fails")
+  aiInjectionSuspected Boolean  @default(false) @map("ai_injection_suspected")
+  aiPromptVersion      String?  @map("ai_prompt_version")
+  aiRubricVersion      String?  @map("ai_rubric_version")
 
   session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
@@ -611,6 +689,11 @@ model CalibrationRun {
   tolerancePassed Boolean          @default(false) @map("tolerance_passed")
   flagRecallOk   Boolean           @default(false) @map("flag_recall_ok")
   notes          String?           @db.Text
+  /// v2.0 (WP8) per-criterion baseline outcomes:
+  /// [{criterion, expertVariance, aiExpertDelta, passed, aiScored}] — the
+  /// pass rule is |AI − expert| ≤ expert-expert variance per criterion;
+  /// failed criteria get aiScored=false (expert direct scoring).
+  criterionResults Json?           @map("criterion_results")
   createdAt      DateTime          @default(now()) @map("created_at")
   updatedAt      DateTime          @updatedAt @map("updated_at")
 
@@ -628,6 +711,9 @@ model CalibrationScore {
   raterId    String?  @map("rater_id")
   anchorBand String   @map("anchor_band") // excellent | normal | borderline | fail
   total      Int
+  /// v2.0 (WP8): per-criterion breakdown [{criterion, score}] so the
+  /// per-criterion pass rule can be computed (not just the anchor total).
+  criterionScores Json? @map("criterion_scores")
   flagged    Boolean  @default(false) // for high_risk anchors: did the rater catch the flag
   createdAt  DateTime @default(now()) @map("created_at")
 
@@ -635,6 +721,31 @@ model CalibrationScore {
 
   @@index([runId])
   @@map("calibration_scores")
+}
+
+/// v2.0 (WP8) AI-grading baseline gate — the pre-launch protocol result for a
+/// (level, taskType, promptVersion) combination. AI-assisted grading runs
+/// LIVE only when a PASSED row matches; otherwise the grader operates in
+/// SHADOW mode (scores stored as reference, every task routed to the expert
+/// queue). Re-baseline on any prompt/model/rubric/embedded-AI version change
+/// and quarterly (기획서 9-1 / 9-4 / 11-3).
+model AiBaselineGate {
+  id            String    @id @default(cuid())
+  level         CertLevel
+  /// Practice-type label (exact enum string) or '*' for all types at the level.
+  taskType      String    @map("task_type")
+  promptVersion String    @map("prompt_version")
+  passed        Boolean   @default(false)
+  /// Criteria that FAILED the per-criterion rule → excluded from AI scoring
+  /// (grader skips them; expert UI must require them): ["산출물 완성도·품질", …]
+  aiExcludedCriteria Json? @map("ai_excluded_criteria")
+  notes         String?   @db.Text
+  validatedAt   DateTime? @map("validated_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@unique([level, taskType, promptVersion])
+  @@map("ai_baseline_gates")
 }
 
 /// Per-grader, per-round expert scoring record (brief §5). One row per
@@ -657,6 +768,35 @@ model ExpertScoringRecord {
   @@index([sessionId])
   @@index([sessionId, taskId])
   @@map("expert_scoring_records")
+}
+
+/// v2.0 (WP7) per-examinee session-aggregate record. `record` holds the full
+/// JSON shaped by the level's AXIS_L*_채점_세션집계_JSON스키마_v1_0.json
+/// (schema-validated at build time — see SessionAggregateService); the key
+/// fields are denormalized for queue/report queries. Rebuilt (upserted) at
+/// prescore-complete and at every score change / decision confirmation.
+model SessionAggregate {
+  id                  String    @id @default(cuid())
+  sessionId           String    @unique @map("session_id")
+  certType            CertType  @map("cert_type")
+  level               CertLevel
+  /// Lowercase decision status mirrored from the record (provisional | in_review | confirmed_pass | confirmed_fail | invalidated).
+  decisionStatus      String    @map("decision_status")
+  humanReviewRequired Boolean   @default(false) @map("human_review_required")
+  /// Result of validating `record` against the bundled level schema.
+  schemaValid         Boolean   @default(false) @map("schema_valid")
+  schemaErrors        Json?     @map("schema_errors")
+  record              Json
+  /// Review reasons that set the flag but are NOT in the schema enum
+  /// (e.g. "Part C 12점 미만") — kept out of record.review.review_reasons.
+  internalReviewReasons Json?   @map("internal_review_reasons")
+  aggregatedAt        DateTime  @map("aggregated_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([level, decisionStatus])
+  @@index([humanReviewRequired])
+  @@map("session_aggregates")
 }
 
 /// Append-only audit trail for every grading score change / finalize / publish

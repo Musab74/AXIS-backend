@@ -19,6 +19,7 @@
     "db:seed:content": "ts-node prisma/seed-content-design.ts",
     "db:seed:exam": "ts-node prisma/seed-exam.ts",
     "db:seed:l3-practicals": "ts-node prisma/seed-l3-practicals.ts",
+    "db:seed:v2-samples": "ts-node prisma/seed-v2-samples.ts",
     "db:seed:math": "ts-node prisma/seed-math-questions.ts",
     "db:seed:questions": "ts-node prisma/seed-questions-csv.ts",
     "db:validate:questions": "ts-node prisma/validate-questions.ts",
@@ -46,6 +47,8 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
+    "ajv": "^8.18.0",
+    "ajv-formats": "^3.0.1",
     "@aws-sdk/client-rekognition": "^3.1037.0",
     "@aws-sdk/client-s3": "^3.1037.0",
     "@aws-sdk/client-secrets-manager": "^3.1046.0",

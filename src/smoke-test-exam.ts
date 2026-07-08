@@ -20,7 +20,7 @@
  */
 import { PrismaClient, CertType, CertLevel, ExamSessionStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { LEVEL_EXAM_SPEC, getTiming } from './modules/cbtSessions/exam-spec';
+import { LEVEL_EXAM_SPEC, currentSpecVersion, getTiming } from './modules/cbtSessions/exam-spec';
 import {
   shuffleWithSeed,
   shuffleChoicesWithMapping,
@@ -112,7 +112,9 @@ async function validateContent(certType: CertType, level: CertLevel) {
 
 async function simulateSession(certType: CertType, level: CertLevel, userId: string) {
   const spec = LEVEL_EXAM_SPEC[level];
-  const timing = getTiming(certType, level);
+  // Simulated sessions run under the CURRENT spec version (what a freshly
+  // created session would be stamped with).
+  const timing = getTiming(certType, level, currentSpecVersion());
   const seed = randomUUID();
   const startedAt = new Date();
   // Mirror production: hardDeadline = startedAt + timing.totalMinutes (see
@@ -126,6 +128,7 @@ async function simulateSession(certType: CertType, level: CertLevel, userId: str
       level,
       attemptNo: 99,
       status: ExamSessionStatus.IN_PROGRESS,
+      specVersion: currentSpecVersion(),
       paperSeed: seed,
       startedAt,
       hardDeadline,

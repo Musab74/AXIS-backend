@@ -33,6 +33,12 @@ export interface EssayGradePersist {
   model: string;
   promptHash: string | null;
   latencyMs: number | null;
+  /** v2.0 AI contract (WP6) — null on legacy/code paths. */
+  gate: unknown | null;
+  criticalFails: string[] | null;
+  injectionSuspected: boolean;
+  promptVersion: string | null;
+  rubricVersion: string | null;
 }
 
 /**
@@ -116,7 +122,7 @@ interface L3CriterionScoreJson {
   maxPoints: number;
   score: number;
   matchRatio: number;
-  kind: 'objective' | 'rationale';
+  kind: 'objective' | 'rationale' | 'generated' | 'risk_control';
 }
 
 /** Per-criterion JSON for EssayAnswer.aiCriterionScores from an L3 breakdown. */
@@ -131,7 +137,12 @@ export function l3CriterionScores(l3: L3GradeResult): L3CriterionScoreJson[] {
   }));
 }
 
-export function l3ToPersist(l3: L3GradeResult, aiModel: string, confidence: number): EssayGradePersist {
+export function l3ToPersist(
+  l3: L3GradeResult,
+  aiModel: string,
+  confidence: number,
+  versions?: { promptVersion?: string | null; rubricVersion?: string | null },
+): EssayGradePersist {
   return {
     pct: l3.pct,
     earnedPoints: Math.round(l3.earnedPoints),
@@ -143,10 +154,18 @@ export function l3ToPersist(l3: L3GradeResult, aiModel: string, confidence: numb
     model: aiModel,
     promptHash: null,
     latencyMs: null,
+    gate: l3.gate,
+    criticalFails: [],
+    injectionSuspected: false,
+    promptVersion: versions?.promptVersion ?? null,
+    rubricVersion: versions?.rubricVersion ?? null,
   };
 }
 
-export function claudeToPersist(res: EssayGradeResult): EssayGradePersist {
+export function claudeToPersist(
+  res: EssayGradeResult,
+  rubricVersion?: string | null,
+): EssayGradePersist {
   return {
     pct: res.pct,
     earnedPoints: Math.round(res.total),
@@ -158,12 +177,19 @@ export function claudeToPersist(res: EssayGradeResult): EssayGradePersist {
     model: res.model,
     promptHash: res.promptHash,
     latencyMs: res.latencyMs,
+    gate: res.gate,
+    criticalFails: res.criticalFailCandidates,
+    injectionSuspected: res.injectionSuspected,
+    promptVersion: res.promptVersion,
+    rubricVersion: rubricVersion ?? null,
   };
 }
 
 /**
  * Fold a Claude rationale-only second pass into an L3 result: replace the
  * rationale criterion score, recompute total/pct, keep objective + risk data.
+ * The 선택-근거 gate ORs across both arms: heuristic OR Claude can raise it
+ * (v2.0 WP6), and the Claude contradiction text wins when present.
  */
 export function mergeRationale(l3: L3GradeResult, claudeRes: EssayGradeResult, maxTotal: number): L3GradeResult {
   const claudeScore = claudeRes.criterionScores.reduce((s, c) => s + c.score, 0);
@@ -175,10 +201,15 @@ export function mergeRationale(l3: L3GradeResult, claudeRes: EssayGradeResult, m
   const details = l3.breakdown.details.map((d) =>
     d.kind === 'rationale' ? { ...d, earned: newRationaleScore, note: `${d.note ?? ''} · Claude 보정` } : d,
   );
+  const gate = claudeRes.gate?.triggered
+    ? { ...claudeRes.gate, rule: l3.gate.rule }
+    : l3.gate;
   return {
     ...l3,
     earnedPoints,
     pct,
     breakdown: { ...l3.breakdown, rationaleScore: newRationaleScore, details },
+    gate,
+    needsExpertReview: l3.needsExpertReview || claudeRes.gate?.triggered === true,
   };
 }

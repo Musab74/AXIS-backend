@@ -7,6 +7,8 @@ import type {
 } from '../../integrations/anthropic/claude-essay-grader.service';
 import type { CodeGradingService } from './code-grading.service';
 import type { PrismaService } from '../../common/prisma.service';
+import type { SessionAggregateService } from './session-aggregate.service';
+import type { BaselineGateService } from './baseline-gate.service';
 
 const 현업적용_RUBRIC = {
   practiceType: '현업적용형',
@@ -69,7 +71,10 @@ function makeAnswer(over: { taskId: string; contentText: string; part: ExamPart;
 const CLAUDE_RESULT: EssayGradeResult = {
   criterionScores: [{ key: 'C1', label: 'x', maxPoints: 10, score: 8 }],
   total: 8, maxTotal: 10, pct: 80, band: 'normal', riskFlags: [], confidence: 0.85,
-  rationale: 'ok', model: 'claude-opus-4-8', promptHash: 'h', latencyMs: 100, degraded: false,
+  gate: { triggered: false, rule: '산출물-검증 게이트', contradiction: null },
+  criticalFailCandidates: [], injectionSuspected: false,
+  rationale: 'ok', model: 'claude-opus-4-8', promptHash: 'h',
+  promptVersion: 'AXIS-L2-AI-SCORING-PROMPT-v1.0', latencyMs: 100, degraded: false,
 };
 
 interface CodeMock {
@@ -97,7 +102,14 @@ function harness(
     autoGrade: jest.fn(),
     isJudge0Configured: () => true,
   }) as unknown as CodeGradingService;
-  const svc = new EssayGradingService(prisma, grader, code, new L3PracticalGraderService());
+  // Aggregation is fire-and-forget in the dispatcher — a no-op stub keeps the
+  // dispatcher tests focused on grading routing. The baseline gate stub is
+  // fully live (enforcement is a WP8 production switch).
+  const aggregates = { rebuildSafely: jest.fn(), rebuild: jest.fn(async () => null) } as unknown as SessionAggregateService;
+  const baselineGate = {
+    status: jest.fn(async () => ({ live: true, excludedCriteria: [], reason: 'enforcement_disabled' })),
+  } as unknown as BaselineGateService;
+  const svc = new EssayGradingService(prisma, grader, code, new L3PracticalGraderService(), aggregates, baselineGate);
   return { svc, essayUpdate, sessionUpdate, grade };
 }
 

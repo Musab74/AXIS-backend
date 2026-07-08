@@ -205,6 +205,13 @@ export class CertificatesService {
 
     if (!session) return null;
     if (session.status !== ExamSessionStatus.GRADED || session.passed !== true) return null;
+    // v2.0 (시험 표준 v2.0 WP4) hard guard: the final decision is human-locked —
+    // a v2.0 session can only yield a certificate once an admin/review panel
+    // confirmed it (decision_status = CONFIRMED_PASS). Provisional or
+    // in-review states never issue, no matter who calls this.
+    if (session.specVersion === '2.0' && session.decisionStatus !== 'CONFIRMED_PASS') {
+      return null;
+    }
     const registration = session.registrationId
       ? await this.prisma.registration.findUnique({
           where: { id: session.registrationId },

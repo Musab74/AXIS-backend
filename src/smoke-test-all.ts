@@ -216,7 +216,7 @@ function checkDispatchAndWeighting(): void {
 
   const prev = process.env.L3_PRACTICALS_ENABLED;
   process.env.L3_PRACTICALS_ENABLED = 'true';
-  const scoring = getScoring(CertType.AXIS, CertLevel.L3);
+  const scoring = getScoring(CertType.AXIS, CertLevel.L3, '1.1');
   const win = computeWeightedResult(scoring, (p) => (p === ExamPart.WRITTEN ? 80 : 85));
   check('L3 written 80% + practical 85% → total 82, pass', win.total === 82 && win.passed, `total ${win.total}`);
   const floorFail = computeWeightedResult(scoring, (p) => (p === ExamPart.WRITTEN ? 100 : 55));
@@ -234,8 +234,11 @@ function checkDispatchAndWeighting(): void {
   const base = grader.gradeL3Practical({ points: 10, rubric: 현업적용_RUBRIC }, sub);
   const claudeRationale: EssayGradeResult = {
     criterionScores: [{ key: 'C3', label: '근거', maxPoints: 1, score: 1 }], total: 1, maxTotal: 1, pct: 100,
-    band: 'normal', riskFlags: [], confidence: 0.8, rationale: 'ok', model: 'claude-opus-4-8',
-    promptHash: 'h', latencyMs: 10, degraded: false,
+    band: 'normal', riskFlags: [],
+    gate: { triggered: false, rule: '선택-근거 일치 게이트', contradiction: null },
+    criticalFailCandidates: [], injectionSuspected: false,
+    confidence: 0.8, rationale: 'ok', model: 'claude-opus-4-8',
+    promptHash: 'h', promptVersion: 'AXIS-L3-AI-SCORING-PROMPT-v1.0', latencyMs: 10, degraded: false,
   };
   const merged = mergeRationale(base, claudeRationale, 10);
   check('mergeRationale keeps objective, updates rationale',

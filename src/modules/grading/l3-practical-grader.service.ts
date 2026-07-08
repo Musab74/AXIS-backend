@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import type { EssayGradeRiskFlag } from '../../integrations/anthropic/claude-essay-grader.service';
+import type {
+  EssayGradeGate,
+  EssayGradeRiskFlag,
+} from '../../integrations/anthropic/claude-essay-grader.service';
 import { parseRubric, RubricCriterion } from './rubric';
-import { GRADING_CONFIG } from './grading-config';
+import { GATE_RULES, GRADING_CONFIG, severityForRiskTag } from './grading-config';
 import {
   charLength,
   detectSensitivePatterns,
@@ -44,10 +47,42 @@ function deriveMaxPoints(rubric: unknown): number {
  */
 export function parseL3RubricPayload(rubric: unknown): L3RubricPayload {
   const wrapper = asRecord(rubric) ?? {};
+  const fieldPointsRaw = asRecord(wrapper.fieldPoints);
+  const fieldPoints = fieldPointsRaw
+    ? Object.fromEntries(
+        Object.entries(fieldPointsRaw).filter(([, v]) => typeof v === 'number' && v > 0),
+      ) as Record<string, number>
+    : null;
+  const rcRaw = asRecord(wrapper.riskControl);
+  const riskControl =
+    rcRaw && typeof rcRaw.points === 'number'
+      ? {
+          points: rcRaw.points,
+          penaltyPerHit: typeof rcRaw.penaltyPerHit === 'number' ? rcRaw.penaltyPerHit : 1,
+        }
+      : null;
+  const generatedCriteria = Array.isArray(wrapper.generatedCriteria)
+    ? (wrapper.generatedCriteria as Array<Record<string, unknown>>)
+        .filter(
+          (g) =>
+            typeof g.label === 'string' &&
+            typeof g.points === 'number' &&
+            (g.kind === 'prompt_quality' || g.kind === 'verification_request'),
+        )
+        .map((g) => ({
+          label: g.label as string,
+          points: g.points as number,
+          kind: g.kind as 'prompt_quality' | 'verification_request',
+        }))
+    : null;
   return {
     answerKey: asRecord(wrapper.answerKey),
     criteria: parseRubric(rubric, deriveMaxPoints(rubric)),
     responseFormat: asRecord(wrapper.responseFormat),
+    fieldPoints: fieldPoints && Object.keys(fieldPoints).length ? fieldPoints : null,
+    riskControl,
+    generatedCriteria: generatedCriteria?.length ? generatedCriteria : null,
+    mustNotChoose: toStringArray(wrapper.mustNotChoose),
     expertReviewTrigger: wrapper.expertReviewTrigger ?? null,
   };
 }
@@ -161,14 +196,38 @@ export class L3PracticalGraderService {
     const answerKey = payload.answerKey ?? {};
     const maxTotal = payload.criteria.reduce((s, c) => s + c.maxPoints, 0) || task.points;
     const rationalePoints = this.rationalePoints(payload.criteria);
-    const objectivePoints = Math.max(maxTotal - rationalePoints, 0);
 
-    const objective = this.scoreObjective(answerKey, submission.selections, objectivePoints);
+    // v2.0 (WP9): per-criterion splits from the 루브릭 v2.1 템플릿 when the
+    // item declares them; v1.1 items keep the legacy even split (regression-safe).
+    const generatedPoints = (payload.generatedCriteria ?? []).reduce((s, g) => s + g.points, 0);
+    const riskControlPoints = payload.riskControl?.points ?? 0;
+    const objectivePoints = Math.max(
+      maxTotal - rationalePoints - generatedPoints - riskControlPoints,
+      0,
+    );
+
+    const objective = this.scoreObjective(
+      answerKey,
+      submission.selections,
+      objectivePoints,
+      payload.fieldPoints,
+    );
+    const mustNotChooseHits = this.countMustNotChoose(payload.mustNotChoose, submission.selections);
+    const riskControlDetail = payload.riskControl
+      ? this.scoreRiskControl(payload.riskControl, mustNotChooseHits)
+      : null;
+    const generatedDetails = payload.generatedCriteria
+      ? this.scoreGenerated(payload.generatedCriteria, submission, answerKey)
+      : [];
     const rationale = this.scoreRationale(submission.rationale, answerKey, rationalePoints);
 
-    const earnedPoints = Math.max(0, Math.min(maxTotal, round2(objective.score + rationale.score)));
+    const generatedScore = round2(generatedDetails.reduce((s, d) => s + d.earned, 0));
+    const autoScore = round2(
+      objective.score + (riskControlDetail?.earned ?? 0) + generatedScore,
+    );
+    const earnedPoints = Math.max(0, Math.min(maxTotal, round2(autoScore + rationale.score)));
     const pct = maxTotal > 0 ? Math.round((earnedPoints / maxTotal) * 100) : 0;
-    const { flags, needsExpertReview } = this.assessRisk({
+    const { flags, gate, needsExpertReview } = this.assessRisk({
       payload,
       submission,
       objectiveRatio: objective.ratio,
@@ -176,20 +235,96 @@ export class L3PracticalGraderService {
       pct,
       earnedPoints,
       taskPoints: task.points,
+      mustNotChooseHits,
     });
 
     return {
       earnedPoints,
       pct,
       breakdown: {
-        objectiveScore: objective.score,
+        // Everything deterministic (selections + 위험통제 penalty + generated
+        // text criteria) — the AI-assisted share is the rationale criterion.
+        objectiveScore: autoScore,
         rationaleScore: rationale.score,
-        details: [...objective.details, rationale.detail],
+        details: [
+          ...objective.details,
+          ...(riskControlDetail ? [riskControlDetail] : []),
+          ...generatedDetails,
+          rationale.detail,
+        ],
       },
       riskFlags: flags,
+      gate,
       needsExpertReview,
       needsClaudeRationaleAssist: rationale.borderline,
     };
+  }
+
+  /** Count selected option codes/texts that appear in the must-not-choose list. */
+  private countMustNotChoose(mustNotChoose: string[], selections: Record<string, unknown>): number {
+    if (mustNotChoose.length === 0) return 0;
+    const banned = new Set(mustNotChoose.map((v) => v.trim().toLowerCase()));
+    let hits = 0;
+    for (const value of Object.values(selections)) {
+      for (const v of toStringArray(value)) {
+        if (banned.has(v.trim().toLowerCase())) hits++;
+      }
+    }
+    return hits;
+  }
+
+  /** 위험통제 (v2.0 현업적용형): base points minus penalty per banned selection, floor 0. */
+  private scoreRiskControl(
+    rc: { points: number; penaltyPerHit: number },
+    hits: number,
+  ): L3GradeDetail {
+    const earned = Math.max(0, round2(rc.points - hits * rc.penaltyPerHit));
+    return {
+      key: 'risk_control',
+      kind: 'risk_control',
+      points: round2(rc.points),
+      earned,
+      matchRatio: rc.points > 0 ? round2(earned / rc.points) : 0,
+      note: hits > 0 ? `금지 옵션 ${hits}건 선택 (−${rc.penaltyPerHit}/건)` : undefined,
+    };
+  }
+
+  /**
+   * v2.0 generated-text criteria (지시 보완 / 검증요청 / 검증절차):
+   *   prompt_quality — keyword coverage of the candidate's 요청문/수정 지시문
+   *   against the answer key's example prompt;
+   *   verification_request — presence of an explicit 검증/점검 요청.
+   * Deterministic first pass; borderline rationale still routes to the Claude
+   * assist, and every band case lands in expert review via the usual triggers.
+   */
+  private scoreGenerated(
+    criteria: NonNullable<L3RubricPayload['generatedCriteria']>,
+    submission: L3Submission,
+    answerKey: Record<string, unknown>,
+  ): L3GradeDetail[] {
+    const text = (submission.promptText ?? '').trim();
+    const example =
+      typeof answerKey.example_prompt === 'string' ? (answerKey.example_prompt as string) : '';
+    return criteria.map((g) => {
+      let ratio = 0;
+      if (text) {
+        ratio =
+          g.kind === 'verification_request'
+            ? /(검증|점검|확인|검토|표시)/.test(text)
+              ? 1
+              : 0
+            : keywordCoverage(text, extractKeywords(example));
+      }
+      const earned = round2(g.points * ratio);
+      return {
+        key: g.label,
+        kind: 'generated' as const,
+        points: round2(g.points),
+        earned,
+        matchRatio: round2(ratio),
+        note: text ? undefined : '생성 텍스트 없음',
+      };
+    });
   }
 
   /** Points on the "근거"/rationale criterion (typically 1); 0 if the rubric has none. */
@@ -202,17 +337,23 @@ export class L3PracticalGraderService {
     answerKey: Record<string, unknown>,
     selections: Record<string, unknown>,
     objectivePoints: number,
+    fieldPoints: Record<string, number> | null,
   ): ObjectiveOutcome {
-    const fields = objectiveFieldNames(answerKey);
+    const fields = fieldPoints
+      ? Object.keys(fieldPoints).filter((k) => k in answerKey || lookupSelection(selections, k) !== undefined)
+      : objectiveFieldNames(answerKey);
     if (fields.length === 0 || objectivePoints <= 0) return { score: 0, ratio: 0, details: [] };
 
+    // v2.0 per-criterion splits when declared (WP9); legacy even split otherwise.
     const per = objectivePoints / fields.length;
+    const pointsOf = (key: string) => (fieldPoints ? fieldPoints[key] ?? 0 : per);
     const details: L3GradeDetail[] = [];
     let ratioSum = 0;
     for (const key of fields) {
       const ratio = scoreField(answerKey[key], lookupSelection(selections, key));
       ratioSum += ratio;
-      details.push({ key, kind: 'objective', points: round2(per), earned: round2(per * ratio), matchRatio: round2(ratio) });
+      const pts = pointsOf(key);
+      details.push({ key, kind: 'objective', points: round2(pts), earned: round2(pts * ratio), matchRatio: round2(ratio) });
     }
     const score = round2(details.reduce((s, d) => s + d.earned, 0));
     return { score, ratio: ratioSum / fields.length, details };
@@ -254,7 +395,8 @@ export class L3PracticalGraderService {
     pct: number;
     earnedPoints: number;
     taskPoints: number;
-  }): { flags: EssayGradeRiskFlag[]; needsExpertReview: boolean } {
+    mustNotChooseHits: number;
+  }): { flags: EssayGradeRiskFlag[]; gate: EssayGradeGate; needsExpertReview: boolean } {
     const flags: EssayGradeRiskFlag[] = [];
     // Below the 24/40 floor, or within the pass-boundary band around it.
     let review =
@@ -265,19 +407,50 @@ export class L3PracticalGraderService {
       review = true;
       flags.push({ code: 'risk_item_low_score', severity: 'MED', detail: `리스크 판단형 저득점 (${ctx.earnedPoints}/${ctx.taskPoints})` });
     }
-    if (this.contradicts(ctx.submission.rationale, ctx.payload.answerKey ?? {}, ctx.objectiveRatio, ctx.coverage)) {
+    // v2.0 (WP9): a banned option (금지 옵션) selection is 감점 + 플래그 + 검수
+    // (개발자 명세서 통합 테스트 T4).
+    if (ctx.mustNotChooseHits > 0) {
+      review = true;
+      flags.push({
+        code: 'must_not_choose_selected',
+        severity: 'MED',
+        detail: `금지 옵션 선택 ${ctx.mustNotChooseHits}건 (감점 적용)`,
+      });
+    }
+    // 선택-근거 일치 게이트 (v2.0 WP6): the heuristic contradiction check is
+    // the deterministic gate arm (Claude assist can also raise it). The gate
+    // only NOMINATES — zeroing the affected selection score is an
+    // expert-confirmed action (admin-grading confirm-gate endpoint).
+    const contradiction = this.contradicts(
+      ctx.submission.rationale,
+      ctx.payload.answerKey ?? {},
+      ctx.objectiveRatio,
+      ctx.coverage,
+    );
+    const gate: EssayGradeGate = {
+      triggered: contradiction,
+      rule: GATE_RULES.L3,
+      contradiction: contradiction ? '근거 서술이 정답 선택과 상충하는 정황' : null,
+    };
+    if (contradiction) {
       review = true;
       flags.push({ code: 'rationale_contradiction', severity: 'MED', detail: '근거 서술이 정답 선택과 상충하는 정황' });
     }
+    // PII/copyright regex hits map onto the L3 controlled vocabulary (WP6);
+    // the matched pattern code is kept in `detail` for the reviewer.
     for (const hit of detectSensitivePatterns(ctx.submission.rationale)) {
       review = true;
+      const tag = hit.kind === 'pii' ? '개인정보 입력' : '저작권 위험';
       flags.push({
-        code: hit.code,
-        severity: hit.kind === 'pii' ? 'HIGH' : 'MED',
-        detail: hit.kind === 'pii' ? '근거 텍스트에서 개인정보 패턴 탐지' : '근거 텍스트에서 저작권 위험 패턴 탐지',
+        code: tag,
+        severity: severityForRiskTag(tag),
+        detail:
+          hit.kind === 'pii'
+            ? `근거 텍스트에서 개인정보 패턴 탐지 (${hit.code})`
+            : '근거 텍스트에서 저작권 위험 패턴 탐지',
       });
     }
-    return { flags, needsExpertReview: review };
+    return { flags, gate, needsExpertReview: review };
   }
 
   /** Mostly-correct selections but a rationale that shares nothing with — or negates — the key. */
