@@ -15,7 +15,12 @@ export type GradingStrategyName = 'l3_answer_key' | 'claude_rubric' | 'code_auto
 
 export interface GradingPlan {
   strategy: 'l3_answer_key' | 'claude_rubric';
-  /** aiChatLog is scored for practical/deliverable; ESSAY is AI-forbidden. */
+  /**
+   * aiChatLog is scored for practical/deliverable answers WHEN a log exists;
+   * ESSAY is AI-forbidden. v2.0 sessions only ever produce a log at L2 (the
+   * level gate — isSessionAiAllowed — blocks the assistant for L1/L3), so in
+   * practice this surfaces logs for L2 tasks and legacy v1.1 deliverables.
+   */
   includeChatLog: boolean;
   /** AXIS-C code tasks attach a Judge0 execution summary to the Claude context. */
   includeExecutionSummary: boolean;

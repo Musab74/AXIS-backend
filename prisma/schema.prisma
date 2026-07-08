@@ -501,6 +501,9 @@ model TaskTemplate {
   techAssumptionType String?   @map("tech_assumption_type")
   nextReviewAt       DateTime? @map("next_review_at")
   pretestStats       Json?     @map("pretest_stats")
+  /// 난이도 (중/상 for L3 실습 — 중·중·상·상 fixed rule). NULL = untagged
+  /// (draw falls back to any item in the type pool).
+  difficulty         String?   @map("difficulty")
 
   @@unique([certType, level, setNo, taskType])
   @@index([certType, level, part])

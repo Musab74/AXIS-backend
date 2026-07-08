@@ -7,6 +7,7 @@ import { MonitorHeartbeatService } from '../adminMonitor/monitor-heartbeat.servi
 import { assertIdentityVerifiedForSession } from '../cbtSessions/exam-identity-guard';
 import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
 import { getTiming, toSpecVersion } from '../cbtSessions/exam-spec';
+import { isSessionAiAllowed } from '../cbtPractical/cbt-practical.service';
 
 @Injectable()
 export class CbtExamsService {
@@ -102,7 +103,12 @@ export class CbtExamsService {
           sampleData: t.sampleData,
           requiredStructure: t.requiredStructure,
           forbiddenRules: t.forbiddenRules,
-          aiToolAllowed: t.aiToolAllowed,
+          // 시험 표준 v2.0: 내장 AI는 L2에서만 — L1(전면 금지)·L3(도구 없음)
+          // 세션에는 과제의 원본 정책과 무관하게 'AI 사용 불가'로 마스킹해
+          // 프런트의 채팅 패널을 원천 차단한다 (서버 askAi 게이트와 동일 규칙).
+          aiToolAllowed: isSessionAiAllowed(specVersion, session.level)
+            ? t.aiToolAllowed
+            : 'AI 사용 불가',
           // L3 실습형 answer-free structured-answer spec (null for L1/L2 or legacy L3).
           l3,
           // Saved progress so a reload/resume restores the candidate's work

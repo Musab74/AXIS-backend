@@ -475,11 +475,10 @@ section('v2.0 review bands (sessionReviewV2)');
     l1Bands.reviewReasons.includes('Part B 경계밴드(30~36)'));
   // Acceptance case: total 71 + Part C 10 → PASS but human_review_required=true.
   const l1PartC = sessionReviewV2(CertLevel.L1, { total: 80, objective: 20, practice: 45, partC: 10 });
-  check('L1 Part C 10 → review required via internal "Part C 12점 미만"',
+  check('L1 Part C 10 → review via official "Part C 검수 기준(12 미만)" (v1.1)',
     l1PartC.humanReviewRequired &&
-      l1PartC.internalReasons.includes('Part C 12점 미만') &&
-      !l1PartC.reviewReasons.includes('Part C 12점 미만'), // NOT in schema enum
-    JSON.stringify(l1PartC.internalReasons));
+      l1PartC.reviewReasons.includes('Part C 검수 기준(12 미만)'),
+    JSON.stringify(l1PartC.reviewReasons));
   const l1Clean = sessionReviewV2(CertLevel.L1, { total: 85, objective: 20, practice: 45, partC: 15 });
   check('L1 clean → no review', !l1Clean.humanReviewRequired);
 }

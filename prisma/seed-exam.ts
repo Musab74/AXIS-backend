@@ -85,7 +85,8 @@ const SPEC: Record<CertType, Record<CertLevel, LevelSpec>> = {
         { name: 'AI Governance & Risk Management', qs: 10, pts: 4 },
       ],
       practical: [
-        { part: ExamPart.DELIVERABLE, title: 'Part B: Organizational AX execution plan', durationMin: 60, points: 55, scenario: 'You lead a 50-person product org. Using the fixed execution-plan template, draft an AX adoption plan: org diagnosis, candidate tasks, prioritization, 30/90/180-day roadmap, governance, data/tool policy, risk control, change management, KPIs, post-monitoring. Use the in-platform AI tool; the chat log will be reviewed.' },
+        // v2.0: L1 is AI-free end to end (ai_use_blocked) — no in-platform AI tool.
+        { part: ExamPart.DELIVERABLE, title: 'Part B: Organizational AX execution plan', durationMin: 60, points: 55, scenario: 'You lead a 50-person product org. Using the fixed execution-plan template, draft an AX adoption plan: org diagnosis, candidate tasks, prioritization, 30/90/180-day roadmap, governance, data/tool policy, risk control, change management, KPIs, post-monitoring. AI tools are prohibited for the entire L1 exam; write only within the fixed template.' },
         { part: ExamPart.ESSAY, title: 'Part C-1: Risk & incident response essay', durationMin: 15, points: 10, scenario: 'An AI vendor leak just exposed customer data. Describe your first 24 hours: containment, scope assessment, reporting chain, recurrence prevention, and accountability.' },
         { part: ExamPart.ESSAY, title: 'Part C-2: Change & performance management essay', durationMin: 15, points: 10, scenario: 'Staff resist a new AI workflow. Describe your change-management plan: stakeholder analysis, training, pilot/rollout, KPIs, and communication cadence.' },
       ],

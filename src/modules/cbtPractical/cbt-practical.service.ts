@@ -29,6 +29,22 @@ export function isExamAiAllowed(aiToolAllowed: string | null | undefined): boole
   return !AI_DISALLOWED_RE.test(v);
 }
 
+/**
+ * 시험 표준 v2.0 레벨 게이트: 내장 AI 어시스턴트는 L2 실습에서만 허용된다.
+ *   - L1: 응시 모드가 AI 전면 금지 (ai_use_blocked — L1 기획서 v2.0 3-3,
+ *     잠금 브라우저 + 고정 템플릿 + 유사도 검사). Part B(실행계획서)도 예외 없음.
+ *   - L3: AI 도구 없이 '판단력'만 평가한다 (L3 기획서 v2.0 3-1).
+ * 이 게이트는 과제별 aiToolAllowed(문항 정책)보다 우선한다. v1.1 세션은
+ * 종전대로 과제 정책만 따른다 — 진행 중 세션의 규칙은 바뀌지 않는다.
+ */
+export function isSessionAiAllowed(
+  specVersion: string | null | undefined,
+  level: string | null | undefined,
+): boolean {
+  if (specVersion !== '2.0') return true; // legacy: task-level policy decides
+  return level === 'L2';
+}
+
 @Injectable()
 export class CbtPracticalService {
   private readonly logger = new Logger(CbtPracticalService.name);
@@ -73,6 +89,13 @@ export class CbtPracticalService {
       where: { sessionId_taskId: { sessionId, taskId: body.taskId } },
     });
     if (!assigned) throw new BadRequestException('Task not part of this exam session');
+
+    // 시험 표준 v2.0: 레벨 게이트가 과제 정책보다 우선한다 — L1은 AI 전면 금지,
+    // L3는 AI 도구 없음. 내장 어시스턴트는 L2에서만 응답한다. getPaper도 같은
+    // 규칙으로 aiToolAllowed를 마스킹해 UI의 채팅 패널 자체를 끈다.
+    if (!isSessionAiAllowed(session.specVersion, session.level)) {
+      throw new ForbiddenException('이 시험에서는 AI 어시스턴트를 사용할 수 없습니다.');
+    }
 
     // The in-exam assistant is allowed ONLY where the authored task permits it
     // (practical/실습형 + any task whose `aiToolAllowed` grants the built-in AI).

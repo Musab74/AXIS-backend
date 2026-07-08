@@ -59,6 +59,9 @@ export const REVIEW_REASONS_V2 = {
     PART_B_BAND: 'Part B 경계밴드(30~36)',
     PART_A_BELOW_MIN: 'Part A 최저기준 미달(13 미만)',
     PART_B_BELOW_MIN: 'Part B 최저기준 미달(33 미만)',
+    // v1.1 schema (2026-07-06): Part C < 12 is now an OFFICIAL review reason
+    // (Part C has no hard floor — this is a weakness indicator, not a fail).
+    PART_C_LOW: 'Part C 검수 기준(12 미만)',
     GATE_TRIGGERED: '계획-리스크 게이트 발동',
     CRITICAL_FAIL: '치명 실패 패턴',
     RISK_FLAG: '위험 플래그',
@@ -69,16 +72,12 @@ export const REVIEW_REASONS_V2 = {
 } as const;
 
 /**
- * Internal-only review reasons: they set `human_review_required` but are NOT
- * in the session-aggregate schema enum, so the aggregation service keeps them
- * out of the schema-validated `review_reasons` array (they are persisted on
- * the aggregate row separately).
- *   - L1 Part C < 12: v2.0 removed the Part C hard floor (WP2); the old 60%
- *     line survives only as this weakness-indicator review trigger.
+ * Internal-only review reasons still exist as a mechanism (they set
+ * `human_review_required` but are NOT in a schema enum, so the aggregation
+ * service keeps them out of the validated `review_reasons` array). Currently
+ * only "미채점 과제 존재" uses it — the L1 Part C < 12 reason graduated to an
+ * OFFICIAL schema enum string in the v1.1 schema (see REVIEW_REASONS_V2.L1).
  */
-export const INTERNAL_REVIEW_REASONS_V2 = {
-  L1_PART_C_LOW: 'Part C 12점 미만',
-} as const;
 
 /**
  * v2.0 boundary/trigger cutoffs per level, on each level's POINT scale
@@ -225,7 +224,8 @@ export function sessionReviewV2(
     if (input.objective < b.partAMin) push(R.PART_A_BELOW_MIN);
     if (input.practice < b.partBMin) push(R.PART_B_BELOW_MIN);
     if (input.partC != null && input.partC < b.partCReviewBelow) {
-      internal.push(INTERNAL_REVIEW_REASONS_V2.L1_PART_C_LOW);
+      // v1.1: now an official schema enum string (no longer an internal reason).
+      push(R.PART_C_LOW);
     }
     if (input.gateTriggered) push(R.GATE_TRIGGERED);
     if (input.criticalFail) push(R.CRITICAL_FAIL);

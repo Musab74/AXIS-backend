@@ -3,7 +3,9 @@ import { CertType, ExamSessionStatus, Prisma, RegistrationStatus } from '@prisma
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
 
-const CERTIFICATE_VALIDITY_YEARS = 3;
+// 자격 유효기간: 등급 취득일로부터 2년 (메인 기획서 v2.0 2-5 — AI 기술 변화
+// 속도를 반영한 역량 시효). Was 3; corrected to the documented 2 years.
+const CERTIFICATE_VALIDITY_YEARS = 2;
 
 interface CertificateRow {
   id: string;

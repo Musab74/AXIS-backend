@@ -72,21 +72,33 @@ function stripJosa(token: string): string {
 const STOPWORDS = new Set(['그리고', '또한', '때문', '위해', '통해', '대한', '있는',
   '있다', '한다', '하는', '되는', '경우', '수', '등', '및', '것', '이는', '그']);
 
-/** Content keywords from a reference sentence (answerKey.key_reason), de-duped. */
+/**
+ * Content keywords from a reference sentence (answerKey.key_reason), de-duped.
+ *
+ * When the reference has more unique tokens than `limit`, we sample EVENLY
+ * across the whole sentence rather than taking the first N. A long key_reason
+ * often front-loads one case (e.g. the "allowed" materials) and back-loads the
+ * other (the "forbidden" materials); taking the first 8 tokens then measures
+ * coverage against only half the reason, so a correct rationale that emphasises
+ * the other half scores coverage 0 and falsely trips the selection-reason gate.
+ * Even sampling keeps coverage representative of the entire reference. Short
+ * references (≤ limit unique tokens) are returned unchanged.
+ */
 export function extractKeywords(text: string, limit = 8): string[] {
-  const tokens = (text ?? '')
-    .split(/[\s,.;:!?()[\]{}"'·…/\\]+/)
-    .map((t) => stripJosa(t.trim()))
-    .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
   const seen = new Set<string>();
-  const out: string[] = [];
-  for (const t of tokens) {
+  const uniq: string[] = [];
+  for (const raw of (text ?? '').split(/[\s,.;:!?()[\]{}"'·…/\\]+/)) {
+    const t = stripJosa(raw.trim());
+    if (t.length < 2 || STOPWORDS.has(t)) continue;
     const n = normalize(t);
     if (!n || seen.has(n)) continue;
     seen.add(n);
-    out.push(t);
-    if (out.length >= limit) break;
+    uniq.push(t);
   }
+  if (uniq.length <= limit) return uniq;
+  const out: string[] = [];
+  const step = uniq.length / limit;
+  for (let i = 0; i < limit; i++) out.push(uniq[Math.floor(i * step)]);
   return out;
 }
 
@@ -100,6 +112,29 @@ export function keywordCoverage(rationale: string, keywords: string[]): number {
     return nk.length >= 2 && nr.includes(nk);
   }).length;
   return hit / keywords.length;
+}
+
+/**
+ * Phrases that ADVOCATE the unsafe action — the reliable "reason argues the
+ * opposite of the safe selection" signal for the 선택-근거 일치 게이트. These are
+ * precise on purpose: they match "입력해도 문제없다 / 확인할 필요 없다 / 그대로
+ * 제출" (contradiction) but NOT "입력할 수 없다 / 반드시 확인해야" (the correct
+ * judgment), which mere negation-proximity or keyword-coverage cannot tell
+ * apart. Operates on raw text (spacing preserved) with flexible \s*.
+ */
+const UNSAFE_ADVOCACY: RegExp[] = [
+  // "(입력/사용/제출/전송/업로드/활용)해도 … (된다/괜찮/문제없/안전/무방/상관없)"
+  /(입력|사용|제출|전송|업로드|활용|공유)\s*(해도|하여도|해서도|하더라도)[^.。!?]{0,18}(된다|됩니다|괜찮|무방|문제\s*없|안전|상관\s*없|이상\s*없)/,
+  // "(확인/검증/검토)…필요 없다 / 안 해도 된다 / 하지 않아도"
+  /(확인|검증|검토|점검)[^.。!?]{0,12}(필요\s*(가|도|는)?\s*없|안\s*해도|하지\s*않아도|생략)/,
+  // "그대로 … (사용/제출/발송/전송/입력/활용)"
+  /그대로[^.。!?]{0,14}(사용|제출|발송|전송|입력|활용|올려|넣)/,
+];
+
+/** True when the rationale advocates performing the unsafe action (see UNSAFE_ADVOCACY). */
+export function advocatesUnsafeAction(text: string): boolean {
+  const t = text ?? '';
+  return UNSAFE_ADVOCACY.some((re) => re.test(t));
 }
 
 const NEGATIONS = ['않', '없', '불필요', '아니', '문제없', '필요없', '해서는안', '하면안', '제외'];

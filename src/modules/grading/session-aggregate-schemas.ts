@@ -10,9 +10,9 @@
 
 export const L1_SESSION_AGGREGATE_SCHEMA = {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://ainex.example/schemas/axis-l1-session-aggregate-v1.0.json",
+  "$id": "https://ainex.example/schemas/axis-l1-session-aggregate-v1.1.json",
   "title": "AXIS L1 채점 세션 집계 레코드",
-  "description": "응시자 1인의 L1 세션 집계(Part A 25 + Part B 55 + Part C 20 = 100점, 120분). 전 필드 [시스템 산출]. AI 산출분은 파트·문항 단위 레코드에 기록. 합격 잠금은 전문가·관리자 승인 후.",
+  "description": "v1.1 정정(2026-07-06): review_reasons에 'Part C 검수 기준(12 미만)' 추가 — B·C 템플릿 v2.0 mandatory_expert_review와 동기화(Part C는 하드컷이 아닌 검수 트리거, 기획서 3-1). 응시자 1인의 L1 세션 집계(Part A 25 + Part B 55 + Part C 20 = 100점, 120분). 전 필드 [시스템 산출]. AI 산출분은 파트·문항 단위 레코드에 기록. 합격 잠금은 전문가·관리자 승인 후.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -30,7 +30,7 @@ export const L1_SESSION_AGGREGATE_SCHEMA = {
   ],
   "properties": {
     "schema_version": {
-      "const": "1.0"
+      "const": "1.1"
     },
     "qualification": {
       "const": "AXIS"
@@ -204,6 +204,7 @@ export const L1_SESSION_AGGREGATE_SCHEMA = {
               "Part B 경계밴드(30~36)",
               "Part A 최저기준 미달(13 미만)",
               "Part B 최저기준 미달(33 미만)",
+              "Part C 검수 기준(12 미만)",
               "계획-리스크 게이트 발동",
               "치명 실패 패턴",
               "위험 플래그",

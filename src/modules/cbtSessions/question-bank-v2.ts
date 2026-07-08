@@ -46,6 +46,42 @@ export function isDrawablePretest(lifecycleStatus: string | null | undefined): b
   return lifecycleStatus === ITEM_LIFECYCLE.PRETEST;
 }
 
+/**
+ * Canonical difficulty labels. L3/L2 use 하/중/상; L1 uses 중/상/최상 (no easy
+ * tier — leadership judgment, L1 기획서 4-3: 중 50% / 상 40% / 최상 10%). The
+ * bank stores tags in either Korean or the legacy English (easy/medium/hard);
+ * `normalizeDifficulty` folds both onto these.
+ */
+export const DIFFICULTY = { LOW: '하', MID: '중', HIGH: '상', TOP: '최상' } as const;
+export type CanonDifficulty = (typeof DIFFICULTY)[keyof typeof DIFFICULTY];
+
+const DIFFICULTY_ALIASES: Record<string, CanonDifficulty> = {
+  하: '하', 중: '중', 상: '상', 최상: '최상',
+  easy: '하', lower: '하', low: '하',
+  medium: '중', mid: '중', normal: '중',
+  hard: '상', upper: '상', high: '상',
+  highest: '최상', top: '최상', expert: '최상',
+};
+
+/** Fold a raw difficulty tag (Korean or English) onto a canonical label, or null. */
+export function normalizeDifficulty(raw: string | null | undefined): CanonDifficulty | null {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (!v) return null;
+  return DIFFICULTY_ALIASES[v] ?? DIFFICULTY_ALIASES[(raw ?? '').trim()] ?? null;
+}
+
+/**
+ * L3 실습형 fixed difficulty by canonical practice type (v2.0 기획서: 매 시험
+ * 중2 + 상2). The 4-item paper draws exactly one per type, so pinning each
+ * type's difficulty here enforces the 중·중·상·상 rule at draw time.
+ */
+export const PRACTICAL_DIFFICULTY_BY_TYPE: Record<string, CanonDifficulty> = {
+  현업적용형: '중',
+  지시설계형: '중',
+  분석검증형: '상',
+  리스크판단형: '상',
+};
+
 /** 기술 전제 유형 enum (v2.1 template). ≠ '없음' shortens the review cycle. */
 export const TECH_ASSUMPTION_TYPES = [
   '없음',
@@ -133,7 +169,9 @@ export const BANK_BLUEPRINTS_V2: Record<CertLevel, LevelBankBlueprint> = {
   },
   L1: {
     maxPretestPerForm: 2,
-    difficultyDistribution: { 하: 3, 중: 14, 상: 8 },
+    // L1 기획서 4-3: 중 50% / 상 40% / 최상 10% of 25 (no 하 tier — leadership
+    // judgment). NOT 하/중/상 like L2·L3.
+    difficultyDistribution: { 중: 13, 상: 10, 최상: 2 },
     typeDistribution: {
       조직진단형: 4,
       과제포트폴리오형: 4,
@@ -202,4 +240,85 @@ export function auditAnswerPositions(keys: string[]): AnswerPositionAudit {
     }
   }
   return { ok: problems.length === 0, counts, problems };
+}
+
+export interface DifficultyDrawResult<T> {
+  selected: T[];
+  /** Bands the bank could not fully supply (need > available). */
+  shortfalls: { difficulty: string; need: number; got: number }[];
+  /** Items drawn from outside the target bands to reach the form length. */
+  backfilled: number;
+  /** Final per-band counts of the selected form (canonical labels). */
+  bandCounts: Record<string, number>;
+}
+
+/**
+ * 층화 랜덤출제 (v2.0 기획서 8-3): draw a form that matches the level's
+ * `difficultyDistribution`, spreading each band across subjects so no single
+ * subject dominates a band. Deterministic (seeded shuffle). Degrades safely —
+ * a band the bank can't fill records a shortfall and is backfilled from the
+ * remaining pool so the form is still full length (never blocks the exam while
+ * banks are being populated). Difficulty is the enforced axis; subject is a
+ * best-effort spread within each band.
+ */
+export function stratifiedDrawByDifficulty<T>(
+  pool: readonly T[],
+  distribution: Record<string, number>,
+  difficultyOf: (t: T) => string | null | undefined,
+  subjectOf: (t: T) => number,
+  shuffle: (items: readonly T[], salt: string) => T[],
+  seedSalt: string,
+): DifficultyDrawResult<T> {
+  const byBand = new Map<string, T[]>();
+  for (const it of pool) {
+    const band = normalizeDifficulty(difficultyOf(it));
+    if (!band) continue;
+    (byBand.get(band) ?? byBand.set(band, []).get(band)!).push(it);
+  }
+
+  const roundRobinBySubject = (items: readonly T[], need: number, salt: string): T[] => {
+    const bySub = new Map<number, T[]>();
+    for (const it of shuffle(items, salt)) {
+      const s = subjectOf(it);
+      (bySub.get(s) ?? bySub.set(s, []).get(s)!).push(it);
+    }
+    const queues = [...bySub.values()];
+    const out: T[] = [];
+    for (let i = 0; out.length < need && queues.some((q) => q.length); i++) {
+      const q = queues[i % queues.length];
+      if (q.length) out.push(q.shift()!);
+    }
+    return out;
+  };
+
+  const selected: T[] = [];
+  const used = new Set<T>();
+  const shortfalls: DifficultyDrawResult<T>['shortfalls'] = [];
+  const bandCounts: Record<string, number> = {};
+
+  for (const [rawBand, need] of Object.entries(distribution)) {
+    const band = normalizeDifficulty(rawBand) ?? rawBand;
+    const take = roundRobinBySubject(byBand.get(band) ?? [], need, `${seedSalt}:${band}`);
+    for (const it of take) {
+      selected.push(it);
+      used.add(it);
+    }
+    bandCounts[band] = take.length;
+    if (take.length < need) shortfalls.push({ difficulty: band, need, got: take.length });
+  }
+
+  const target = Object.values(distribution).reduce((s, n) => s + n, 0);
+  let backfilled = 0;
+  if (selected.length < target) {
+    const remaining = shuffle(pool.filter((p) => !used.has(p)), `${seedSalt}:backfill`);
+    for (const it of remaining) {
+      if (selected.length >= target) break;
+      selected.push(it);
+      backfilled++;
+      const band = normalizeDifficulty(difficultyOf(it));
+      if (band) bandCounts[band] = (bandCounts[band] ?? 0) + 1;
+    }
+  }
+
+  return { selected, shortfalls, backfilled, bandCounts };
 }

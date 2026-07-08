@@ -6,6 +6,7 @@ import type {
 import { parseRubric, RubricCriterion } from './rubric';
 import { GATE_RULES, GRADING_CONFIG, severityForRiskTag } from './grading-config';
 import {
+  advocatesUnsafeAction,
   charLength,
   detectSensitivePatterns,
   extractKeywords,
@@ -453,7 +454,17 @@ export class L3PracticalGraderService {
     return { flags, gate, needsExpertReview: review };
   }
 
-  /** Mostly-correct selections but a rationale that shares nothing with — or negates — the key. */
+  /**
+   * Selection-reason contradiction — two independent signals:
+   *   1. Advocacy: the reason explicitly argues for the UNSAFE action
+   *      ("입력해도 된다", "확인할 필요 없다") even though the selections were
+   *      right. Precise phrase match — the reliable on-topic signal that
+   *      keyword coverage cannot catch (correct + wrong reasons share vocab).
+   *   2. Off-topic / negation: mostly-correct selections but a rationale that
+   *      shares no concept with the reference (coverage 0) or negates a prose
+   *      answer-key value. Catches irrelevant/copy-paste reasons.
+   * Fires on EITHER. The gate only nominates — a human confirms the zeroing.
+   */
   private contradicts(
     rationale: string,
     answerKey: Record<string, unknown>,
@@ -462,6 +473,7 @@ export class L3PracticalGraderService {
   ): boolean {
     const text = (rationale ?? '').trim();
     if (charLength(text) < 40) return false;
+    if (advocatesUnsafeAction(text)) return true;
     if (objectiveRatio >= 0.6 && coverage === 0) return true;
     for (const [k, v] of Object.entries(answerKey)) {
       if (NON_OBJECTIVE_KEYS.has(k)) continue;

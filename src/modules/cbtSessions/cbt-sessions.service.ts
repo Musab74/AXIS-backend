@@ -10,6 +10,9 @@ import {
   isDrawablePretest,
   isDrawableScored,
   L3_PRACTICAL_MIN_PER_TYPE,
+  normalizeDifficulty,
+  PRACTICAL_DIFFICULTY_BY_TYPE,
+  stratifiedDrawByDifficulty,
 } from './question-bank-v2';
 import { getBonusAttempts } from './registration-bonus-attempts';
 import type { ConsentDto } from './cbt-sessions.dto';
@@ -426,10 +429,45 @@ export class CbtSessionsService {
         );
       }
 
-      // Select questions respecting subject distribution
+      // Select questions. v2.0 (기획서 8-3 층화 랜덤출제): when the pool carries
+      // difficulty tags, enforce the level's 난이도 분포 (하/중/상 or 중/상/최상),
+      // spreading each band across subjects. Falls back to the subject-only draw
+      // for legacy (v1.1) sessions or an untagged bank — regression-safe.
       let selectedQuestions: typeof allQuestions = [];
 
-      if (examSpec.subjectDistribution) {
+      const difficultyTagged = allQuestions.filter(
+        (q) => normalizeDifficulty(q.difficulty) != null,
+      ).length;
+      const useDifficultyDraw =
+        specVersion === '2.0' &&
+        !!blueprint.difficultyDistribution &&
+        // require most of the pool to be tagged, else the draw would be mostly backfill
+        difficultyTagged >= Math.ceil(allQuestions.length * 0.5);
+
+      if (useDifficultyDraw) {
+        const res = stratifiedDrawByDifficulty(
+          allQuestions,
+          blueprint.difficultyDistribution,
+          (q) => q.difficulty,
+          (q) => q.subjectIndex,
+          (items, salt) => shuffleWithSeed([...items], `${seed}:${salt}`),
+          `${seed}`,
+        );
+        selectedQuestions = res.selected.slice(0, examSpec.writtenQuestionCount);
+        if (res.shortfalls.length > 0 || res.backfilled > 0) {
+          this.logger.warn(
+            JSON.stringify({
+              msg: 'difficulty_draw_shortfall',
+              certType: s.certType,
+              level: s.level,
+              target: blueprint.difficultyDistribution,
+              bandCounts: res.bandCounts,
+              shortfalls: res.shortfalls,
+              backfilled: res.backfilled,
+            }),
+          );
+        }
+      } else if (examSpec.subjectDistribution) {
         // Group questions by subject
         const bySubject = new Map<number, typeof allQuestions>();
         for (const q of allQuestions) {
@@ -575,8 +613,26 @@ export class CbtSessionsService {
               );
             }
             if (pool && pool.length > 0) {
-              const pick = shuffleWithSeed(pool, `${seed}:practical:${type}`)[0];
-              chosenTasks.push(pick);
+              // v2.0 난이도 고정 (중·중·상·상): prefer an item whose difficulty
+              // matches this type's required band; fall back to any item in the
+              // type pool (with a warning) so the section is never short.
+              const wantBand = PRACTICAL_DIFFICULTY_BY_TYPE[type];
+              const shuffledPool = shuffleWithSeed(pool, `${seed}:practical:${type}`);
+              const banded = wantBand
+                ? shuffledPool.filter((t) => normalizeDifficulty(t.difficulty) === wantBand)
+                : [];
+              if (wantBand && banded.length === 0) {
+                this.logger.warn(
+                  JSON.stringify({
+                    msg: 'l3_practical_difficulty_unmet',
+                    certType: s.certType,
+                    type,
+                    wantBand,
+                    poolSize: pool.length,
+                  }),
+                );
+              }
+              chosenTasks.push((banded.length > 0 ? banded : shuffledPool)[0]);
             }
           }
           // Defensive fallback: if any type was missing from the DB (e.g. flag

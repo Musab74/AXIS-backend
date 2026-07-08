@@ -404,7 +404,12 @@ export class ClaudeEssayGraderService {
           {
             model: MODEL_ID,
             max_tokens: MAX_TOKENS,
-            temperature: 0, // 재현성 — 감사 대응 (개발자 명세서 §3)
+            // NOTE: claude-opus-4-8 rejects an explicit `temperature` (400
+            // "temperature is deprecated for this model") — passing it degraded
+            // EVERY grading call to the human queue. The model is effectively
+            // deterministic for this tool-forced task; reproducibility for audit
+            // (개발자 명세서 §3) comes from the fixed prompt + tool_choice, not a
+            // temperature knob. Do not re-add `temperature` here.
             system: [
               { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
               { type: 'text', text: taskContext, cache_control: { type: 'ephemeral' } },

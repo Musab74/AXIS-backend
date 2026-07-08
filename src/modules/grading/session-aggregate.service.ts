@@ -282,7 +282,9 @@ export class SessionAggregateService {
     const rubricVersion = answers.map((a) => a.aiRubricVersion).find((v) => v) ?? 'v1';
 
     const base = {
-      schema_version: '1.0',
+      // L1 session-aggregate schema is v1.1 (adds the Part C 검수 기준 review
+      // reason); L2/L3 remain v1.0. Must match the level schema's const.
+      schema_version: level === 'L1' ? '1.1' : '1.0',
       qualification: 'AXIS',
       level,
       applicant_ref: applicantRef(session.userId),

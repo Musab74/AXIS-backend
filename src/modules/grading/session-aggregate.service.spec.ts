@@ -174,7 +174,7 @@ describe('SessionAggregateService — schema validation per level', () => {
     expect(((record.audit as AnyRec).prompt_log_hash as string).length).toBe(64);
   });
 
-  it('L1: Part C 10/20 → valid record, PASS gates, review via internal reason only', async () => {
+  it('L1: Part C 10/20 → valid record, PASS gates, review via official v1.1 reason', async () => {
     const tasks = [
       task({ id: 'b', part: ExamPart.DELIVERABLE, orderIndex: 0, points: 55 }),
       task({ id: 'c1', part: ExamPart.ESSAY, orderIndex: 1, points: 10 }),
@@ -201,10 +201,9 @@ describe('SessionAggregateService — schema validation per level', () => {
       part_a_min_13: true,
       part_b_min_33: true,
     });
-    // Part C < 12 must set human review WITHOUT an off-enum schema reason.
+    // v1.1: Part C < 12 sets human review as an OFFICIAL schema review reason.
     expect(created.humanReviewRequired).toBe(true);
-    expect((record.review as AnyRec).review_reasons).not.toContain('Part C 12점 미만');
-    expect(created.internalReviewReasons).toContain('Part C 12점 미만');
+    expect((record.review as AnyRec).review_reasons).toContain('Part C 검수 기준(12 미만)');
     const parts = (record.part_record_refs as Array<AnyRec>).map((r) => r.part);
     expect(parts).toEqual(['B', 'C1', 'C2']);
   });

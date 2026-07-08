@@ -36,6 +36,8 @@
     "smoke:scoring": "ts-node src/smoke-test-scoring.ts",
     "smoke:all": "ts-node src/smoke-test-all.ts",
     "smoke:ai": "ts-node src/smoke-test-ai-assistant.ts",
+    "smoke:grading": "ts-node src/smoke-test-grading-adversarial.ts",
+    "smoke:grading:det": "ts-node src/smoke-test-grading-mcq-practical.ts",
     "smoke:gemini": "ts-node src/smoke-test-gemini.ts",
     "smoke:nice": "bash scripts/smoke-nice.sh",
     "smoke:payment": "bash scripts/smoke-payment-portone.sh",

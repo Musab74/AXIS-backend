@@ -31,6 +31,7 @@
 import { PrismaClient, CertType, CertLevel, ExamPart } from '@prisma/client';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { PRACTICAL_DIFFICULTY_BY_TYPE } from '../src/modules/cbtSessions/question-bank-v2';
 // js-yaml ships as CJS without bundled types in this repo; require it dynamically
 // to avoid pulling in @types/js-yaml as a new direct dependency.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -322,6 +323,9 @@ async function seedSeries(spec: SourceSpec): Promise<SeededRow[]> {
         taskType,
         timeLimit: 5,
         maxScore: 10,
+        // 난이도 고정 (중·중·상·상): use the item's tag, else the canonical band
+        // for this practice type so the draw can always enforce the rule.
+        difficulty: item.difficulty ?? PRACTICAL_DIFFICULTY_BY_TYPE[taskType] ?? null,
       },
     });
     seeded.push({ certType: spec.certType, taskType, itemId });

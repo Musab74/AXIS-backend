@@ -432,6 +432,24 @@ export class AdminGradingService {
     });
     const taskById = new Map(tasks.map((t) => [t.id, t]));
 
+    // v2.0 review context: the session aggregate carries WHY this session is in
+    // review (schema review_reasons + any internal ones like "미채점 과제 존재") and
+    // the mirrored decision status. Read-only for the reviewer UI.
+    const aggregate = await this.prisma.sessionAggregate.findUnique({
+      where: { sessionId },
+      select: { record: true, internalReviewReasons: true },
+    });
+    const aggRecord = (aggregate?.record ?? null) as {
+      review?: { review_reasons?: unknown };
+    } | null;
+    const schemaReasons = Array.isArray(aggRecord?.review?.review_reasons)
+      ? (aggRecord!.review!.review_reasons as unknown[]).filter((r): r is string => typeof r === 'string')
+      : [];
+    const internalReasons = Array.isArray(aggregate?.internalReviewReasons)
+      ? (aggregate!.internalReviewReasons as unknown[]).filter((r): r is string => typeof r === 'string')
+      : [];
+    const reviewReasons = [...new Set([...schemaReasons, ...internalReasons])];
+
     const cheatingSuspect =
       session.proctorWarnings > 0 ||
       proctoringEvents.some(
@@ -455,6 +473,10 @@ export class AdminGradingService {
       passed: session.passed,
       failReason: session.failReason,
       mandatoryReview: session.mandatoryReview,
+      // v2.0 decision state machine + review context (WP4/WP7).
+      specVersion: session.specVersion,
+      decisionStatus: session.decisionStatus,
+      reviewReasons,
       assignedExpertId,
       proctorWarnings: session.proctorWarnings,
       cheatingSuspect,
@@ -498,6 +520,10 @@ export class AdminGradingService {
           aiRationale: a.aiRationale,
           aiCriterionScores: a.aiCriterionScores,
           aiRiskFlags: a.aiRiskFlags,
+          // v2.0 contract (WP6) — the signals that route a task to review.
+          aiGate: a.aiGate,
+          aiCriticalFails: a.aiCriticalFails,
+          aiInjectionSuspected: a.aiInjectionSuspected,
           // Grading provenance for the reviewer UI: which grader produced the
           // first pass ('l3-answer-key' | 'claude-opus-4-8' | 'hybrid-l3+claude'
           // | 'judge0-autotest') and its raw earned points.

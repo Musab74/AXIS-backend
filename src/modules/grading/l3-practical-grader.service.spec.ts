@@ -206,6 +206,83 @@ describe('gradeL3Practical — expert-review triggers', () => {
     expect(r.gate.triggered).toBe(false);
     expect(r.gate.contradiction).toBeNull();
   });
+
+  // Regression: a long two-clause key_reason once made a genuinely on-topic
+  // rationale score coverage 0 (extractKeywords took only the opening clause),
+  // falsely tripping the gate. Even-sampled keywords must keep this clean.
+  it('does NOT gate a correct rationale against a long two-clause key_reason', () => {
+    const task: L3GradeTask = {
+      points: 10,
+      rubric: {
+        practiceType: '현업적용형',
+        fieldPoints: { tasks: 4, excluded_materials: 1, review_point: 1 },
+        riskControl: { points: 2, penaltyPerHit: 1 },
+        mustNotChoose: ['T1', 'T3', 'T5'],
+        answerKey: {
+          tasks: ['T2', 'T4'],
+          excluded_materials: ['M2', 'M5'],
+          review_point: ['R1'],
+          key_reason:
+            '금액란과 수신자란이 비워진 서식과 게시된 절차 문서, 날짜만 담긴 일정표는 입력 가능하다. ' +
+            '확정 전 금액표와 이름·연락처가 담긴 담당자 파일은 지침의 금지 범주이며 최종 확인은 사람의 책임이다.',
+        },
+        rubric: [
+          { criterion: '핵심 판단', points: 4 },
+          { criterion: '자료·절차', points: 2 },
+          { criterion: '위험통제', points: 2 },
+          { criterion: '근거', points: 2 },
+        ],
+      },
+    };
+    const sub = parseL3Submission(
+      JSON.stringify({
+        selects: { tasks: ['T2', 'T4'], excluded_materials: ['M2', 'M5'], review_point: ['R1'] },
+        shortReason:
+          '확정 전 금액표와 담당자 연락처 파일은 회사 지침이 금지한 개인정보·미확정 정보이므로 입력할 수 없고, ' +
+          '금액과 수신 대상의 최종 일치는 사람이 발송 전에 반드시 확인해야 하기 때문입니다.',
+      }),
+    )!;
+    const r = grader.gradeL3Practical(task, sub);
+    expect(r.gate.triggered).toBe(false);
+    expect(r.riskFlags.map((f) => f.code)).not.toContain('rationale_contradiction');
+    expect(r.earnedPoints).toBeGreaterThanOrEqual(9);
+  });
+
+  // The precise unsafe-advocacy detector: a reason that USES the right
+  // vocabulary but argues for the forbidden action must still gate.
+  it('gates a rationale that advocates the unsafe action despite right selections', () => {
+    const task: L3GradeTask = {
+      points: 10,
+      rubric: {
+        practiceType: '현업적용형',
+        fieldPoints: { tasks: 4, excluded_materials: 1, review_point: 1 },
+        mustNotChoose: [],
+        answerKey: {
+          tasks: ['T2', 'T4'],
+          excluded_materials: ['M2', 'M5'],
+          review_point: ['R1'],
+          key_reason: '확정 전 금액표와 담당자 연락처 파일은 입력 금지이며 사람이 최종 확인해야 한다.',
+        },
+        rubric: [
+          { criterion: '핵심 판단', points: 4 },
+          { criterion: '자료·절차', points: 2 },
+          { criterion: '위험통제', points: 2 },
+          { criterion: '근거', points: 2 },
+        ],
+      },
+    };
+    const sub = parseL3Submission(
+      JSON.stringify({
+        selects: { tasks: ['T2', 'T4'], excluded_materials: ['M2', 'M5'], review_point: ['R1'] },
+        shortReason:
+          '확정 전 금액표와 담당자 연락처 파일도 편의를 위해 그대로 외부 도구에 입력해도 전혀 문제가 없으며 ' +
+          '사람이 다시 확인할 필요도 없다고 판단했기 때문입니다.',
+      }),
+    )!;
+    const r = grader.gradeL3Practical(task, sub);
+    expect(r.gate.triggered).toBe(true);
+    expect(r.needsExpertReview).toBe(true);
+  });
 });
 
 describe('gradeL3Practical — Claude rationale assist', () => {

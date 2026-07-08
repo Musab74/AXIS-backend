@@ -12,7 +12,6 @@ import {
   currentSpecVersion,
 } from '../cbtSessions/exam-spec';
 import {
-  INTERNAL_REVIEW_REASONS_V2,
   REVIEW_BANDS_V2,
   REVIEW_REASONS_V2,
   sessionReviewV2,
@@ -194,14 +193,13 @@ describe('review bands v2.0 (WP3)', () => {
     );
   });
 
-  it('L1: Part C < 12 is an INTERNAL review trigger, not a schema reason', () => {
+  it('L1: Part C < 12 is now an OFFICIAL schema review reason (v1.1)', () => {
     const r = sessionReviewV2(CertLevel.L1, { total: 80, objective: 20, practice: 45, partC: 11 });
     expect(r.humanReviewRequired).toBe(true);
-    expect(r.internalReasons).toContain(INTERNAL_REVIEW_REASONS_V2.L1_PART_C_LOW);
-    expect(r.reviewReasons).not.toContain(INTERNAL_REVIEW_REASONS_V2.L1_PART_C_LOW);
+    expect(r.reviewReasons).toContain('Part C 검수 기준(12 미만)');
     // Exactly 12 does not trigger.
     const ok = sessionReviewV2(CertLevel.L1, { total: 80, objective: 20, practice: 45, partC: 12 });
-    expect(ok.internalReasons).toEqual([]);
+    expect(ok.reviewReasons).not.toContain('Part C 검수 기준(12 미만)');
   });
 
   it('flag-driven reasons map to each level’s enum strings', () => {
