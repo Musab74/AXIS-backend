@@ -24,12 +24,12 @@ jobs:
           git reset --hard origin/main
           npm ci
           npx prisma generate
-          # Sync DB schema (new tables/columns) from schema.prisma. Additive
-          # changes apply cleanly; a destructive diff makes db push exit
-          # non-zero, stopping the deploy before build/restart (by design —
-          # never drop prod data automatically). Same path the manual-*.sql
-          # headers document ("Run once, or use prisma db push").
-          npx prisma db push --skip-generate
+          # Apply pending prisma/migrations/manual-*.sql (tracked in the
+          # manual_migrations table, additive-only, never drops anything).
+          # NOT `prisma db push` — the live raw-SQL `certificates` table is
+          # intentionally outside schema.prisma and db push would drop it.
+          # A real failure exits non-zero and stops the deploy here.
+          npm run db:apply-migrations
           npm run build
           npm test -- --passWithNoTests || true
           pm2 restart axis-backend --update-env

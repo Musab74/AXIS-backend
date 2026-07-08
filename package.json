@@ -40,7 +40,8 @@
     "smoke:nice": "bash scripts/smoke-nice.sh",
     "smoke:payment": "bash scripts/smoke-payment-portone.sh",
     "smoke:payment:v1": "bash scripts/smoke-payment-portone-v1.sh",
-    "restart:pm2": "node -e \"require('dotenv').config({path:'.env',override:true});require('child_process').spawnSync('pm2',['restart','axis-backend','--update-env'],{env:process.env,stdio:'inherit'});\""
+    "restart:pm2": "node -e \"require('dotenv').config({path:'.env',override:true});require('child_process').spawnSync('pm2',['restart','axis-backend','--update-env'],{env:process.env,stdio:'inherit'});\"",
+    "db:apply-migrations": "ts-node scripts/apply-manual-migrations.ts"
   },
   "keywords": [],
   "author": "",
