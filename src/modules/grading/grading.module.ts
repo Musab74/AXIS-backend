@@ -11,6 +11,7 @@ import { BaselineGateService } from './baseline-gate.service';
 import { SessionAggregateController } from './session-aggregate.controller';
 import { SessionAggregateService } from './session-aggregate.service';
 import { ClaudeEssayGraderService } from '../../integrations/anthropic/claude-essay-grader.service';
+import { ExamTranslationService } from '../../integrations/anthropic/exam-translation.service';
 import { PrismaService } from '../../common/prisma.service';
 import { AdminMonitorModule } from '../adminMonitor/admin-monitor.module';
 import { AdminNotificationsModule } from '../adminNotifications/admin-notifications.module';
@@ -31,6 +32,7 @@ import { NcObjectStorageModule } from '../../integrations/ncObjectStorage/nc-obj
     SessionAggregateService,
     BaselineGateService,
     ClaudeEssayGraderService,
+    ExamTranslationService,
     PrismaService,
   ],
   exports: [EssayGradingService, L3PracticalGraderService, SessionAggregateService, BaselineGateService],

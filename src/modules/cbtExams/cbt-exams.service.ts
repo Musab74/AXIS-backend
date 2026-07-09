@@ -8,6 +8,7 @@ import { assertIdentityVerifiedForSession } from '../cbtSessions/exam-identity-g
 import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
 import { getTiming, toSpecVersion } from '../cbtSessions/exam-spec';
 import { isSessionAiAllowed } from '../cbtPractical/cbt-practical.service';
+import { ExamTranslationService } from '../../integrations/anthropic/exam-translation.service';
 
 @Injectable()
 export class CbtExamsService {
@@ -16,6 +17,7 @@ export class CbtExamsService {
     private readonly heartbeat: MonitorHeartbeatService,
     private readonly pause: ExamSessionPauseService,
     private readonly config: ConfigService,
+    private readonly translation: ExamTranslationService,
   ) {}
 
   async getPaper(userId: string, sessionId: string) {
@@ -24,6 +26,7 @@ export class CbtExamsService {
       include: {
         answers: { orderBy: { orderIndex: 'asc' } },
         essayAnswers: true,
+        user: { select: { id: true, userId: true } },
       },
     });
     if (!session) throw new NotFoundException('Session not found');
@@ -58,7 +61,7 @@ export class CbtExamsService {
 
     const specVersion = toSpecVersion(session.specVersion);
     const timing = getTiming(session.certType, session.level, specVersion);
-    return {
+    const paper = {
       session: {
         id: session.id,
         certType: session.certType,
@@ -119,6 +122,49 @@ export class CbtExamsService {
         };
       }),
     };
+
+    // QA/TEST ONLY: render the paper in English for the single ENGLISH_TEST_USER.
+    // Never touches real candidates; degrades to Korean if translation fails.
+    if (this.translation.isEnglishTestUser(session.user)) {
+      await this.translatePaperToEnglish(paper);
+    }
+    return paper;
+  }
+
+  /** Collect the candidate-facing strings, translate once (batched), write back. */
+  private async translatePaperToEnglish(paper: {
+    questions: { stem: string; choices: { key: string; text: string }[] }[];
+    tasks: {
+      title: string;
+      scenario: string;
+      requiredStructure?: string | null;
+      l3: { practiceType: string | null; fields?: { label: string; options?: string[] }[] } | null;
+    }[];
+  }): Promise<void> {
+    const strs: string[] = [];
+    const setters: ((v: string) => void)[] = [];
+    const add = (v: string | null | undefined, set: (v: string) => void) => {
+      if (v && v.trim()) { strs.push(v); setters.push(set); }
+    };
+    for (const q of paper.questions) {
+      add(q.stem, (v) => (q.stem = v));
+      for (const c of q.choices) add(c.text, (v) => (c.text = v));
+    }
+    for (const t of paper.tasks) {
+      add(t.title, (v) => (t.title = v));
+      add(t.scenario, (v) => (t.scenario = v));
+      add(t.requiredStructure ?? undefined, (v) => (t.requiredStructure = v));
+      if (t.l3) {
+        add(t.l3.practiceType ?? undefined, (v) => t.l3 && (t.l3.practiceType = v));
+        for (const f of t.l3.fields ?? []) {
+          add(f.label, (v) => (f.label = v));
+          if (f.options) f.options.forEach((o, i) => add(o, (v) => f.options && (f.options[i] = v)));
+        }
+      }
+    }
+    if (strs.length === 0) return;
+    const translated = await this.translation.toEnglish(strs);
+    translated.forEach((v, i) => setters[i](v));
   }
 
   async saveAnswer(

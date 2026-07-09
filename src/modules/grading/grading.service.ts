@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ExamPart, ExamSessionStatus, Prisma } from '@prisma/client';
+import { CertLevel, ExamPart, ExamSessionStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { getTiming, toSpecVersion } from '../cbtSessions/exam-spec';
 import { AdminMonitorGateway } from '../adminMonitor/admin-monitor.gateway';
@@ -11,6 +11,7 @@ import { assertRegistrationActiveForSession } from '../cbtSessions/registration-
 import { EssayGradingService } from './essay-grading.service';
 import { L3AutoFinalizeService } from './l3-autofinalize.service';
 import { computeWrittenScoring } from './written-scoring';
+import { ExamTranslationService } from '../../integrations/anthropic/exam-translation.service';
 
 @Injectable()
 export class GradingService {
@@ -25,13 +26,14 @@ export class GradingService {
     private readonly essayGrading: EssayGradingService,
     private readonly pause: ExamSessionPauseService,
     private readonly l3AutoFinalize: L3AutoFinalizeService,
+    private readonly translation: ExamTranslationService,
   ) {}
 
   async submit(userId: string, sessionId: string) {
     await this.pause.assertNotPaused(sessionId);
     const session = await this.prisma.examSession.findUnique({
       where: { id: sessionId },
-      include: { answers: true, essayAnswers: true },
+      include: { answers: true, essayAnswers: true, user: { select: { id: true, userId: true } } },
     });
     if (!session) throw new NotFoundException();
     if (session.userId !== userId) throw new ForbiddenException();
@@ -161,6 +163,13 @@ export class GradingService {
         },
       });
 
+      // QA/TEST ONLY: the ENGLISH_TEST_USER answered in English — translate the
+      // free-text answers back to Korean BEFORE any grading runs, so the Korean
+      // grader scores them natively. No-op for every real candidate.
+      if (this.translation.isEnglishTestUser(session.user)) {
+        await this.backTranslateAnswers(sessionId, session.level);
+      }
+
       if (session.level === 'L3') {
         // L3-with-practicals (운영기획서 §10): await the AI prescore and, when the
         // AI is confident (mandatoryReview=false) and every task scored, GRADE in
@@ -245,6 +254,60 @@ export class GradingService {
     );
 
     return this.getResult(userId, sessionId);
+  }
+
+  /**
+   * QA/TEST ONLY (ENGLISH_TEST_USER): translate the session's free-text answers
+   * English → Korean in place before grading. L3 structured answers: only the
+   * 근거(shortReason) is translated (80–150자); selections are language-neutral
+   * codes. L1/L2: the whole deliverable/essay + the L2 chat-log user turns.
+   * Never throws (toKorean degrades to the original), so submit is never blocked.
+   */
+  private async backTranslateAnswers(sessionId: string, level: CertLevel): Promise<void> {
+    const answers = await this.prisma.essayAnswer.findMany({ where: { sessionId } });
+    for (const a of answers) {
+      const raw = (a.contentText ?? '').trim();
+      let newContent: string | undefined;
+      if (level === CertLevel.L3 && (raw.startsWith('{') || raw.startsWith('['))) {
+        try {
+          const obj = JSON.parse(raw) as Record<string, unknown>;
+          const key = typeof obj.shortReason === 'string' ? 'shortReason' : 'short_reason';
+          const reason = obj[key];
+          if (typeof reason === 'string' && reason.trim()) {
+            obj[key] = await this.translation.toKorean(reason, { minChars: 80, maxChars: 150 });
+            newContent = JSON.stringify(obj);
+          }
+        } catch {
+          /* leave structured answer as-is */
+        }
+      } else if (raw) {
+        newContent = await this.translation.toKorean(raw);
+      }
+
+      let newLog: Prisma.InputJsonValue | undefined;
+      if (Array.isArray(a.aiChatLog) && a.aiChatLog.length) {
+        const log = a.aiChatLog as Array<{ role?: string; text?: string; ts?: number }>;
+        const turns = [];
+        for (const t of log) {
+          turns.push(
+            t?.role === 'user' && typeof t.text === 'string' && t.text.trim()
+              ? { ...t, text: await this.translation.toKorean(t.text) }
+              : t,
+          );
+        }
+        newLog = turns as unknown as Prisma.InputJsonValue;
+      }
+
+      if (newContent !== undefined || newLog !== undefined) {
+        await this.prisma.essayAnswer.update({
+          where: { id: a.id },
+          data: {
+            ...(newContent !== undefined ? { contentText: newContent } : {}),
+            ...(newLog !== undefined ? { aiChatLog: newLog } : {}),
+          },
+        });
+      }
+    }
   }
 
   async getResult(userId: string, sessionId: string) {
