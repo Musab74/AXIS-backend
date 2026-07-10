@@ -53,6 +53,7 @@ describe('PortoneApplyService', () => {
     applyPortOneCancelled: jest.fn(async () => undefined),
     applyPortOneVaIssued: jest.fn(async () => undefined),
     applyPortOneFailed: jest.fn(async () => undefined),
+    applyRemoteState: jest.fn(async () => 'PAID'),
   } as unknown as PaymentsService;
 
   function svc() {
@@ -245,6 +246,61 @@ describe('PortoneApplyService', () => {
       }),
     ).rejects.toMatchObject({
       response: { error: 'unexpected_status' },
+    });
+  });
+
+  describe('verifyAndHandleWebhookPayload — webhooks are untrusted triggers', () => {
+    it('applies the API-reported state, not the webhook-claimed type (spoofed cancel)', async () => {
+      (portoneGateway.verifyWebhook as jest.Mock).mockResolvedValueOnce([
+        { type: 'CANCELLED', merchantOrderId: 'AXIS-r1-1', transactionId: 'imp_1' },
+      ]);
+      // The PG API says the payment is actually PAID — the forged cancel must not win.
+      mockGetPayment.mockResolvedValueOnce({
+        id: 'imp_1',
+        status: 'PAID',
+        amount: { total: 100_000 },
+      });
+      prisma.payment.findFirst.mockResolvedValueOnce({
+        orderId: 'AXIS-r1-1',
+        amount: 100_000,
+      });
+
+      await svc().verifyAndHandleWebhookPayload('{}', {});
+
+      expect(payments.applyRemoteState).toHaveBeenCalledWith(
+        expect.objectContaining({ orderId: 'AXIS-r1-1' }),
+        expect.objectContaining({ status: 'PAID' }),
+      );
+      expect(payments.applyPortOneCancelled).not.toHaveBeenCalled();
+    });
+
+    it('changes nothing when the PG API cannot be reached', async () => {
+      (portoneGateway.verifyWebhook as jest.Mock).mockResolvedValueOnce([
+        { type: 'PAID', merchantOrderId: 'AXIS-r1-1', transactionId: 'imp_1' },
+      ]);
+      mockGetPayment.mockRejectedValue(new Error('network down'));
+
+      await svc().verifyAndHandleWebhookPayload('{}', {});
+
+      expect(payments.applyRemoteState).not.toHaveBeenCalled();
+      expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+      mockGetPayment.mockReset();
+    });
+
+    it('warns and skips when no local payment matches the refs', async () => {
+      (portoneGateway.verifyWebhook as jest.Mock).mockResolvedValueOnce([
+        { type: 'PAID', merchantOrderId: 'UNKNOWN-1', transactionId: 'imp_x' },
+      ]);
+      mockGetPayment.mockResolvedValueOnce({
+        id: 'imp_x',
+        status: 'PAID',
+        amount: { total: 100_000 },
+      });
+      prisma.payment.findFirst.mockResolvedValueOnce(null);
+
+      await svc().verifyAndHandleWebhookPayload('{}', {});
+
+      expect(payments.applyRemoteState).not.toHaveBeenCalled();
     });
   });
 

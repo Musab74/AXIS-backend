@@ -27,6 +27,8 @@ export interface NotifyInput {
   severity?: AdminNotification['severity'];
   href?: string;
   meta?: Record<string, unknown>;
+  /** Bypass admin mute preferences — reserve for money-critical alerts. */
+  force?: boolean;
 }
 
 @Injectable()
@@ -106,9 +108,11 @@ export class AdminNotificationsService implements OnModuleInit {
   }
 
   async notify(input: NotifyInput): Promise<AdminNotification | null> {
-    const prefs = await this.getPreferences();
-    const prefKey = PREFERENCE_KEY_BY_CATEGORY[input.category];
-    if (!prefs[prefKey]) return null;
+    if (!input.force) {
+      const prefs = await this.getPreferences();
+      const prefKey = PREFERENCE_KEY_BY_CATEGORY[input.category];
+      if (!prefs[prefKey]) return null;
+    }
 
     const notification: AdminNotification = {
       id: randomUUID(),

@@ -22,6 +22,15 @@ export class PortoneV2Gateway implements PortoneGateway {
     return this.verify.getPayment(remoteRef);
   }
 
+  /** V2 paymentId IS the merchant-side order id, so this is a plain lookup. */
+  async getPaymentByMerchantOrderId(merchantOrderId: string): Promise<PortonePaymentLike | null> {
+    try {
+      return await this.verify.getPayment(merchantOrderId);
+    } catch {
+      return null;
+    }
+  }
+
   async cancelPayment(remoteRef: string, reason: string, amount?: number): Promise<void> {
     await this.verify.cancelPayment(remoteRef, reason, amount);
   }
@@ -55,10 +64,10 @@ export class PortoneV2Gateway implements PortoneGateway {
       return [{ type: 'VA_ISSUED', merchantOrderId, transactionId }];
     }
     if (eventType === 'Transaction.Cancelled' || status === 'cancelled') {
-      return [{ type: 'CANCELLED', merchantOrderId }];
+      return [{ type: 'CANCELLED', merchantOrderId, transactionId }];
     }
     if (eventType === 'Transaction.Failed') {
-      return [{ type: 'FAILED', merchantOrderId }];
+      return [{ type: 'FAILED', merchantOrderId, transactionId }];
     }
 
     this.logger.warn(`PortOne V2 webhook: ignored event ${String(eventType ?? status)}`);

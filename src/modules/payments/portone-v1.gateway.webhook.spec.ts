@@ -1,68 +1,67 @@
-import { BadRequestException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
 import { PortoneV1Gateway } from './portone-v1.gateway';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const SECRET = 'test-imp-secret';
-
-function makeConfig(secret: string | null = SECRET): ConfigService {
-  const map: Record<string, string | undefined> = {
-    'portone.v1ImpSecret': secret ?? undefined,
-    'portone.v1ApiSecret': undefined,
-  };
-  return {
-    get: (key: string) => map[key],
-  } as unknown as ConfigService;
+function makeConfig(): ConfigService {
+  return { get: () => undefined } as unknown as ConfigService;
 }
 
-function signPayload(impUid: string, status: string): string {
-  return createHmac('sha256', SECRET).update(`${impUid}${status}`).digest('hex');
-}
+/**
+ * iamport V1 webhooks are NOT signed — verifyWebhook only parses the body
+ * into untrusted hint events. The security boundary is downstream:
+ * PortoneApplyService.reconcileFromRemote re-fetches every payment from the
+ * PG API and applies only the API-reported state (tested in
+ * portone-apply.service.spec.ts).
+ */
+describe('PortoneV1Gateway.verifyWebhook — untrusted-trigger parsing', () => {
+  const gw = () => new PortoneV1Gateway(makeConfig());
 
-describe('PortoneV1Gateway.verifyWebhook — signature enforcement', () => {
-  it('rejects webhooks with no signature header', async () => {
-    const gw = new PortoneV1Gateway(makeConfig());
-    const body = JSON.stringify({ imp_uid: 'imp_1', merchant_uid: 'm_1', status: 'paid' });
-    await expect(gw.verifyWebhook(body, {})).rejects.toBeInstanceOf(BadRequestException);
-  });
-
-  it('rejects webhooks with an invalid signature', async () => {
-    const gw = new PortoneV1Gateway(makeConfig());
-    const body = JSON.stringify({ imp_uid: 'imp_1', merchant_uid: 'm_1', status: 'paid' });
-    await expect(
-      gw.verifyWebhook(body, { imp_signature: 'not-a-valid-sig' }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
-
-  it('accepts webhooks with a matching signature and returns events', async () => {
-    const gw = new PortoneV1Gateway(makeConfig());
-    const body = JSON.stringify({ imp_uid: 'imp_ok', merchant_uid: 'AXIS_1', status: 'paid' });
-    const events = await gw.verifyWebhook(body, {
-      imp_signature: signPayload('imp_ok', 'paid'),
-    });
-    expect(events).toEqual([
-      { type: 'PAID', merchantOrderId: 'AXIS_1', transactionId: 'imp_ok' },
+  it('parses a JSON body into a PAID hint event', async () => {
+    const body = JSON.stringify({ imp_uid: 'imp_1', merchant_uid: 'AXIS-r1-1', status: 'paid' });
+    await expect(gw().verifyWebhook(body, {})).resolves.toEqual([
+      { type: 'PAID', merchantOrderId: 'AXIS-r1-1', transactionId: 'imp_1' },
     ]);
   });
 
-  it('accepts the lowercase imp-signature header alias', async () => {
-    const gw = new PortoneV1Gateway(makeConfig());
-    const body = JSON.stringify({ imp_uid: 'imp_va', merchant_uid: 'AXIS_va', status: 'ready' });
-    const events = await gw.verifyWebhook(body, {
-      'imp-signature': signPayload('imp_va', 'ready'),
-    });
-    expect(events).toEqual([
-      { type: 'VA_ISSUED', merchantOrderId: 'AXIS_va', transactionId: 'imp_va' },
+  it('parses application/x-www-form-urlencoded bodies (older console config)', async () => {
+    const body = 'imp_uid=imp_2&merchant_uid=AXIS-r2-1&status=ready';
+    await expect(gw().verifyWebhook(body, {})).resolves.toEqual([
+      { type: 'VA_ISSUED', merchantOrderId: 'AXIS-r2-1', transactionId: 'imp_2' },
     ]);
   });
 
-  it('rejects when no imp secret is configured (fails closed)', async () => {
-    const gw = new PortoneV1Gateway(makeConfig(null));
-    const body = JSON.stringify({ imp_uid: 'imp_1', merchant_uid: 'm_1', status: 'paid' });
+  it('maps cancelled and failed statuses and keeps imp_uid as transactionId', async () => {
+    const cancelled = JSON.stringify({ imp_uid: 'imp_3', merchant_uid: 'm_3', status: 'cancelled' });
+    await expect(gw().verifyWebhook(cancelled, {})).resolves.toEqual([
+      { type: 'CANCELLED', merchantOrderId: 'm_3', transactionId: 'imp_3' },
+    ]);
+    const failed = JSON.stringify({ imp_uid: 'imp_4', merchant_uid: 'm_4', status: 'failed' });
+    await expect(gw().verifyWebhook(failed, {})).resolves.toEqual([
+      { type: 'FAILED', merchantOrderId: 'm_4', transactionId: 'imp_4' },
+    ]);
+  });
+
+  it('falls back to imp_uid when merchant_uid is missing', async () => {
+    const body = JSON.stringify({ imp_uid: 'imp_5', status: 'paid' });
+    await expect(gw().verifyWebhook(body, {})).resolves.toEqual([
+      { type: 'PAID', merchantOrderId: 'imp_5', transactionId: 'imp_5' },
+    ]);
+  });
+
+  it('returns [] for unparseable, empty, or incomplete bodies', async () => {
+    await expect(gw().verifyWebhook('{not json', {})).resolves.toEqual([]);
+    await expect(gw().verifyWebhook('', {})).resolves.toEqual([]);
     await expect(
-      gw.verifyWebhook(body, { imp_signature: 'anything' }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+      gw().verifyWebhook(JSON.stringify({ merchant_uid: 'm_1' }), {}),
+    ).resolves.toEqual([]);
+    await expect(
+      gw().verifyWebhook(JSON.stringify({ imp_uid: 'imp_1' }), {}),
+    ).resolves.toEqual([]);
+  });
+
+  it('ignores unknown statuses', async () => {
+    const body = JSON.stringify({ imp_uid: 'imp_6', merchant_uid: 'm_6', status: 'chargeback' });
+    await expect(gw().verifyWebhook(body, {})).resolves.toEqual([]);
   });
 });

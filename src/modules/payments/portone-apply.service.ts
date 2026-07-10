@@ -17,7 +17,6 @@ import { PaymentsService } from './payments.service';
 import {
   extractVaFromPayment,
   getPortoneRemotePaymentId,
-  isVirtualAccountMethod,
   PORTONE_ISSUABLE,
   portoneAmountTotal,
   type PortonePaymentLike,
@@ -503,60 +502,77 @@ export class PortoneApplyService {
     return { ok: true, status: 'PAID', registrationId: registration.id };
   }
 
-  async handlePortoneDepositPaid(webhookPaymentRef: string): Promise<void> {
-    const remote = await this.fetchPaymentWithRetry(webhookPaymentRef);
-    if (!remote) return;
-
-    if (remote.status !== 'PAID') {
-      this.logger.warn(`PortOne webhook: expected PAID, got ${String(remote.status)}`);
-      return;
-    }
-
-    const remoteId = getPortoneRemotePaymentId(remote);
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        OR: [{ orderId: webhookPaymentRef }, { orderId: remoteId }, { paymentKey: remoteId }],
-      },
-    });
-    if (!payment) {
-      this.logger.warn(`PortOne webhook: unknown payment ref=${webhookPaymentRef}`);
-      return;
-    }
-
-    const total = portoneAmountTotal(remote);
-    if (total !== payment.amount) {
-      this.logger.error(`PortOne webhook amount mismatch order=${payment.orderId}`);
-      return;
-    }
-
-    await this.payments.applyPortOnePaid({
-      merchantId: payment.orderId,
-      pgPaymentId: remoteId,
-      rawResponse: remote as unknown as Prisma.InputJsonValue,
-    });
+  /**
+   * V1 getPayment takes imp_uid (our transactionId hint); V2 getPayment takes
+   * paymentId, which is the merchant-side order id. Try the likely ref first
+   * so a webhook doesn't burn retries on a ref the API can never resolve.
+   */
+  private webhookRefOrder(event: { merchantOrderId: string; transactionId: string }): string[] {
+    return this.portoneGateway.version === 'v1'
+      ? [event.transactionId, event.merchantOrderId]
+      : [event.merchantOrderId, event.transactionId];
   }
 
-  private async handleVirtualAccountIssued(merchantOrderId: string, transactionId: string): Promise<void> {
-    const remote = await this.fetchPaymentWithRetry(merchantOrderId);
-    if (!remote) {
-      await this.fetchPaymentWithRetry(transactionId);
+  private async fetchPaymentByRefs(refs: string[]): Promise<PortonePaymentLike | null> {
+    const unique = [...new Set(refs.filter(Boolean))];
+    let lastErr: unknown;
+    for (let round = 0; round < 2; round += 1) {
+      for (const ref of unique) {
+        try {
+          return await this.portoneGateway.getPayment(ref);
+        } catch (e) {
+          lastErr = e;
+        }
+      }
     }
-    const paymentData = remote ?? (await this.fetchPaymentWithRetry(transactionId));
-    if (!paymentData) return;
+    this.logger.warn(
+      `PortOne getPayment failed for refs=[${unique.join(', ')}]: ${String(lastErr)}`,
+    );
+    return null;
+  }
 
-    const pgId = getPortoneRemotePaymentId(paymentData);
-    const merchantId =
-      (await this.prisma.payment.findFirst({
-        where: {
-          OR: [{ orderId: merchantOrderId }, { paymentKey: pgId }, { orderId: transactionId }],
-        },
-      }))?.orderId ?? merchantOrderId;
+  /**
+   * SECURITY MODEL — webhooks are untrusted triggers. Regardless of what the
+   * webhook CLAIMS happened, the payment is re-fetched from the PG API over
+   * TLS and only the API-reported state is applied (PaymentsService
+   * .applyRemoteState). A spoofed webhook — V1 iamport callbacks are unsigned
+   * — can therefore only trigger a lookup, never a state change the PG does
+   * not itself confirm (e.g. a forged "cancelled" for a PAID order is a no-op).
+   */
+  private async reconcileFromRemote(event: {
+    type: string;
+    merchantOrderId: string;
+    transactionId: string;
+  }): Promise<void> {
+    const remote = await this.fetchPaymentByRefs(this.webhookRefOrder(event));
+    if (!remote?.status) return; // network exhaustion — PG webhook retry / reconcile cron will catch up
 
-    await this.payments.applyPortOneVaIssued({
-      merchantId,
-      pgPaymentId: pgId,
-      rawResponse: paymentData as unknown as Prisma.InputJsonValue,
+    const remoteId = getPortoneRemotePaymentId(remote);
+    const local = await this.prisma.payment.findFirst({
+      where: {
+        OR: [
+          { orderId: event.merchantOrderId },
+          { orderId: event.transactionId },
+          { orderId: remoteId },
+          { paymentKey: event.transactionId },
+          { paymentKey: remoteId },
+        ],
+      },
+      select: { orderId: true, amount: true },
     });
+    if (!local) {
+      this.logger.warn(
+        `PortOne webhook: no local payment for refs=${event.merchantOrderId}/${event.transactionId}`,
+      );
+      return;
+    }
+
+    const outcome = await this.payments.applyRemoteState(local, remote);
+    if (outcome !== 'SKIPPED' && outcome !== event.type) {
+      this.logger.warn(
+        `PortOne webhook claimed ${event.type} but API reports ${outcome} — applied API state (order=${local.orderId})`,
+      );
+    }
   }
 
   async verifyAndHandleWebhookPayload(
@@ -565,22 +581,7 @@ export class PortoneApplyService {
   ): Promise<void> {
     const events = await this.portoneGateway.verifyWebhook(rawBodyUtf8, headers);
     for (const event of events) {
-      switch (event.type) {
-        case 'PAID':
-          await this.handlePortoneDepositPaid(event.transactionId);
-          break;
-        case 'VA_ISSUED':
-          await this.handleVirtualAccountIssued(event.merchantOrderId, event.transactionId);
-          break;
-        case 'CANCELLED':
-          await this.payments.applyPortOneCancelled(event.merchantOrderId);
-          break;
-        case 'FAILED':
-          await this.payments.applyPortOneFailed(event.merchantOrderId);
-          break;
-        default:
-          break;
-      }
+      await this.reconcileFromRemote(event);
     }
   }
 }

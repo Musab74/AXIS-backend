@@ -9,14 +9,43 @@ export const envValidationSchema = Joi.object({
 
   DATABASE_URL: Joi.string().required(),
 
-  JWT_ACCESS_SECRET: Joi.string().min(16).required(),
-  JWT_REFRESH_SECRET: Joi.string().min(16).required(),
+  // Known default/placeholder secrets are rejected at boot: with a guessable
+  // JWT secret anyone can forge a SUPER_ADMIN token and every ownership check
+  // (payments, refunds, grading) collapses. Generate real ones with:
+  //   node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
+  JWT_ACCESS_SECRET: Joi.string()
+    .min(16)
+    .invalid(
+      'access-secret',
+      'axis-access-secret-change-in-production',
+    )
+    .required()
+    .when('NODE_ENV', { is: 'production', then: Joi.string().min(32) })
+    .messages({
+      'any.invalid':
+        'JWT_ACCESS_SECRET is a known default value — generate a strong random secret (see comment in env.validation.ts)',
+      'string.min': 'JWT_ACCESS_SECRET is too short — use a 32+ char random secret',
+    }),
+  JWT_REFRESH_SECRET: Joi.string()
+    .min(16)
+    .invalid(
+      'refresh-secret',
+      'axis-refresh-secret-change-in-production',
+    )
+    .required()
+    .when('NODE_ENV', { is: 'production', then: Joi.string().min(32) })
+    .messages({
+      'any.invalid':
+        'JWT_REFRESH_SECRET is a known default value — generate a strong random secret (see comment in env.validation.ts)',
+      'string.min': 'JWT_REFRESH_SECRET is too short — use a 32+ char random secret',
+    }),
 
   PORTONE_STORE_ID: Joi.string().allow('').optional(),
   PORTONE_CHANNEL_KEY: Joi.string().allow('').optional(),
   PORTONE_V2_API_SECRET: Joi.string().allow('').optional(),
   PORTONE_WEBHOOK_SECRET: Joi.string().allow('').optional(),
   PORTONE_WEBHOOK_SECRET_ARN: Joi.string().allow('').optional(),
+  PORTONE_WEBHOOK_ALLOWED_IPS: Joi.string().allow('').optional(),
   PORTONE_MODULE_VERSION: Joi.string().valid('v1', 'v2').default('v2'),
   PORTONE_V1_IMP_CODE: Joi.string().allow('').optional(),
   PORTONE_V1_IMP_KEY: Joi.string().allow('').optional(),
@@ -64,12 +93,33 @@ export const envValidationSchema = Joi.object({
   ADMIN_PORTAL_URL: Joi.string().uri().allow('').optional(),
 
   // Set to 'true' on staging/dev to expose POST /payment/test-confirm, which
-  // bypasses PortOne and marks the registration as PAID. MUST stay unset on prod.
-  TEST_PAYMENT_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  // bypasses PortOne and marks the registration as PAID. Boot REFUSES 'true'
+  // when NODE_ENV=production — any logged-in user could otherwise mark their
+  // own registration PAID for free.
+  TEST_PAYMENT_ENABLED: Joi.string()
+    .valid('true', 'false')
+    .default('false')
+    // NOTE: must be .invalid() — a then:valid('false') would UNION with the
+    // base valid('true','false') and never restrict anything.
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().invalid('true').messages({
+        'any.invalid':
+          'TEST_PAYMENT_ENABLED must be false in production — it lets any user mark registrations PAID for free',
+      }),
+    }),
 
   // Set to 'true' on staging/dev to skip referenceFaceImage check at exam start.
-  // MUST stay false on production.
-  CBT_SKIP_IDENTITY_CHECK: Joi.string().valid('true', 'false').default('false'),
+  // Boot REFUSES 'true' when NODE_ENV=production.
+  CBT_SKIP_IDENTITY_CHECK: Joi.string()
+    .valid('true', 'false')
+    .default('false')
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().invalid('true').messages({
+        'any.invalid': 'CBT_SKIP_IDENTITY_CHECK must be false in production',
+      }),
+    }),
 
   // L3 실습형 4문항 wire-up. Default 'true': L3 runs 40+20 min, 60/40 weighted
   // scoring, pass 70, practical floor 60%. Requires seed-l3-practicals to have

@@ -2,9 +2,11 @@ import { Module } from '@nestjs/common';
 import { RedisModule } from '../../integrations/redis/redis.module';
 import { PrismaService } from '../../common/prisma.service';
 import { PortoneWebhookSecretService } from '../../config/portone-webhook-secret.loader';
+import { AdminNotificationsModule } from '../adminNotifications/admin-notifications.module';
 import { ApplyPaymentController } from './apply-payment.controller';
 import { PortoneWebhookController } from './portone-webhook.controller';
 import { PaymentsService } from './payments.service';
+import { PaymentsReconciliationService } from './payments-reconciliation.service';
 import { PortoneApplyService } from './portone-apply.service';
 import { PortoneVerifyService } from './portone-verify.service';
 import { PortoneV1Gateway } from './portone-v1.gateway';
@@ -13,10 +15,11 @@ import { portoneGatewayProvider } from './portone-gateway.factory';
 import { PORTONE_GATEWAY } from './portone-gateway.interface';
 
 @Module({
-  imports: [RedisModule],
+  imports: [RedisModule, AdminNotificationsModule],
   controllers: [ApplyPaymentController, PortoneWebhookController],
   providers: [
     PaymentsService,
+    PaymentsReconciliationService,
     PortoneApplyService,
     PortoneVerifyService,
     PortoneWebhookSecretService,

@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
 import type { PortonePaymentLike } from './portone-payment.types';
 import {
   NormalizedWebhookEvent,
@@ -9,6 +8,34 @@ import {
 } from './portone-gateway.interface';
 import { PortoneV1Client } from './portone-v1.client';
 import { iamportPaymentToPortoneLike } from './portone-v1-normalize';
+
+type V1WebhookPayload = {
+  imp_uid?: string;
+  merchant_uid?: string;
+  status?: string;
+};
+
+/**
+ * iamport V1 webhook bodies arrive as JSON or application/x-www-form-urlencoded
+ * depending on the console configuration — handle both.
+ */
+function parseV1WebhookBody(rawBody: string): V1WebhookPayload | null {
+  const trimmed = rawBody.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('{')) {
+    try {
+      return JSON.parse(trimmed) as V1WebhookPayload;
+    } catch {
+      return null;
+    }
+  }
+  const params = new URLSearchParams(trimmed);
+  const imp_uid = params.get('imp_uid') ?? undefined;
+  const merchant_uid = params.get('merchant_uid') ?? undefined;
+  const status = params.get('status') ?? undefined;
+  if (!imp_uid && !status) return null;
+  return { imp_uid, merchant_uid, status };
+}
 
 @Injectable()
 export class PortoneV1Gateway implements PortoneGateway {
@@ -42,6 +69,11 @@ export class PortoneV1Gateway implements PortoneGateway {
     return iamportPaymentToPortoneLike(row);
   }
 
+  async getPaymentByMerchantOrderId(merchantOrderId: string): Promise<PortonePaymentLike | null> {
+    const row = await this.credentials().findPaymentByMerchantUid(merchantOrderId);
+    return row ? iamportPaymentToPortoneLike(row) : null;
+  }
+
   async findReadyByMerchantUid(merchantUid: string): Promise<PortonePaymentLike | null> {
     const row = await this.credentials().findPaymentByMerchantUid(merchantUid, 'ready');
     if (!row) return null;
@@ -60,66 +92,47 @@ export class PortoneV1Gateway implements PortoneGateway {
     });
   }
 
+  /**
+   * SECURITY MODEL — iamport V1 webhooks are NOT signed. There is no
+   * imp_signature/HMAC header in the real service; iamport's documented
+   * integrity model is server-side re-verification:
+   *   1. The webhook body is treated strictly as an untrusted trigger
+   *      carrying identifiers (imp_uid / merchant_uid).
+   *   2. PortoneApplyService.reconcileFromRemote re-fetches the payment from
+   *      api.iamport.kr over TLS and acts ONLY on the API-reported
+   *      status/amount — a spoofed body can trigger nothing the PG does not
+   *      itself confirm.
+   *   3. Optional defence-in-depth: set PORTONE_WEBHOOK_ALLOWED_IPS to pin
+   *      iamport's documented webhook source IPs (52.78.100.19,
+   *      52.78.48.223, 52.78.5.241) at the controller.
+   */
   async verifyWebhook(
     rawBody: string,
-    headers: Record<string, string | string[] | undefined>,
+    _headers: Record<string, string | string[] | undefined>,
   ): Promise<NormalizedWebhookEvent[]> {
-    const impSecret =
-      this.config.get<string>('portone.v1ImpSecret')?.trim() ||
-      this.config.get<string>('portone.v1ApiSecret')?.trim() ||
-      '';
-    if (!impSecret) {
-      // Fail closed — a webhook cannot be trusted if we have no secret to
-      // verify it with. Refusing here surfaces the misconfiguration in the
-      // PortOne dashboard's retry logs instead of silently accepting spoofed
-      // callbacks.
-      this.logger.error('PortOne V1 webhook: no imp secret configured — rejecting');
-      throw new BadRequestException('PortOne V1 webhook secret is not configured');
-    }
-    let payload: {
-      imp_uid?: string;
-      merchant_uid?: string;
-      status?: string;
-    };
-    try {
-      payload = JSON.parse(rawBody) as typeof payload;
-    } catch {
-      this.logger.warn('PortOne V1 webhook: invalid JSON');
+    const payload = parseV1WebhookBody(rawBody);
+    if (!payload) {
+      this.logger.warn('PortOne V1 webhook: unparseable body');
       return [];
     }
 
-    const impUid = payload.imp_uid;
-    const merchantUid = payload.merchant_uid ?? impUid ?? '';
-    const status = payload.status;
+    const impUid = payload.imp_uid?.trim();
+    const status = payload.status?.trim();
     if (!impUid || !status) return [];
+    const merchantUid = payload.merchant_uid?.trim() || impUid;
 
-    const signature =
-      headers['imp_signature'] ??
-      headers['imp-signature'] ??
-      headers['Imp-Signature'];
-    const sig = Array.isArray(signature) ? signature[0] : signature;
-    if (!sig) {
-      throw new BadRequestException('Missing PortOne V1 webhook signature');
+    switch (status) {
+      case 'paid':
+        return [{ type: 'PAID', merchantOrderId: merchantUid, transactionId: impUid }];
+      case 'ready':
+        return [{ type: 'VA_ISSUED', merchantOrderId: merchantUid, transactionId: impUid }];
+      case 'cancelled':
+        return [{ type: 'CANCELLED', merchantOrderId: merchantUid, transactionId: impUid }];
+      case 'failed':
+        return [{ type: 'FAILED', merchantOrderId: merchantUid, transactionId: impUid }];
+      default:
+        this.logger.warn(`PortOne V1 webhook: ignored status=${status}`);
+        return [];
     }
-    const expected = createHmac('sha256', impSecret)
-      .update(`${impUid}${status}`)
-      .digest('hex');
-    if (expected !== sig) {
-      throw new BadRequestException('Invalid PortOne V1 webhook signature');
-    }
-
-    if (status === 'paid') {
-      return [{ type: 'PAID', merchantOrderId: merchantUid, transactionId: impUid }];
-    }
-    if (status === 'ready') {
-      return [{ type: 'VA_ISSUED', merchantOrderId: merchantUid, transactionId: impUid }];
-    }
-    if (status === 'cancelled') {
-      return [{ type: 'CANCELLED', merchantOrderId: merchantUid }];
-    }
-    if (status === 'failed') {
-      return [{ type: 'FAILED', merchantOrderId: merchantUid }];
-    }
-    return [];
   }
 }

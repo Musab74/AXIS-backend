@@ -47,6 +47,10 @@ export const envConfig = () => ({
     v2ApiSecret: process.env.PORTONE_V2_API_SECRET || '',
     webhookSecret: process.env.PORTONE_WEBHOOK_SECRET || '',
     webhookSecretArn: process.env.PORTONE_WEBHOOK_SECRET_ARN || '',
+    // Comma-separated source-IP allowlist for /webhooks/portone (defence-in-
+    // depth; empty = disabled). iamport V1 sends from 52.78.100.19,
+    // 52.78.48.223, 52.78.5.241. Requires the edge to forward X-Forwarded-For.
+    webhookAllowedIps: (process.env.PORTONE_WEBHOOK_ALLOWED_IPS || '').trim(),
     moduleVersion: (process.env.PORTONE_MODULE_VERSION || 'v2').toLowerCase(),
     v1ImpCode: process.env.PORTONE_V1_IMP_CODE || '',
     v1ImpKey: process.env.PORTONE_V1_IMP_KEY || process.env.PORTONE_V1_API_KEY || '',
