@@ -13,6 +13,13 @@
  * (difficulty, type/risk tags, tech-assumption, answer keys, rubrics), and
  * writes them. 구버전 folders are ignored.
  *
+ * Precedence & lifecycle:
+ *   - Bank folders (평가문항/평가출제) are ingested BEFORE 작성도구 (authoring
+ *     tools), so when an item id exists in both, the bank/정합판 version wins.
+ *   - MCQs that exist ONLY in 작성도구 files import as 초안 (reference,
+ *     non-drawable). Practical sets are exempt: the L2 세트형 sample
+ *     (AXIS-L2-PR-SAMPLE-001) is a full member of the 20-set bank.
+ *
  * Safety:
  *   - Answer.questionId / EssayAnswer.taskId are NOT foreign keys and every
  *     answered item is frozen as a contentSnapshot on the session, so deleting
@@ -47,6 +54,7 @@ const ONLY_LEVEL = val('--level') as CertLevel | undefined;
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     if (name === '구버전' || name === '0_구버전') continue;
+    if (name.includes('비편입')) continue; // 예비/비편입 reserve items — not part of the live bank
     const p = join(dir, name);
     if (statSync(p).isDirectory()) walk(p, out);
     else if (p.endsWith('.yaml') || p.endsWith('.yml')) out.push(p);
@@ -86,7 +94,19 @@ const parsed: Parsed = { mcq: [], practical: [], essay: [] };
 const seenIds = new Set<string>();
 
 // subjectIndex per (level) assigned deterministically by evaluation_area order.
-const subjIndex: Record<string, Map<string, number>> = {};
+// L3 is pre-seeded with the canonical ①~⑥ order of the 400문항 통합본/이원목적표 so
+// the drawable bank always occupies s0–s5 regardless of file walk order (the
+// v5.1 sample uses an old wording for 영역⑥ and would otherwise steal an index).
+const subjIndex: Record<string, Map<string, number>> = {
+  L3: new Map([
+    ['AI 현실 이해와 한계 판단', 0],
+    ['업무문제 정의와 AI 적용·도구 선택', 1],
+    ['AI 지시·맥락·대화 설계', 2],
+    ['AI 산출물 검증과 품질관리', 3],
+    ['업무 산출물 수정·적용', 4],
+    ['보안·개인정보·저작권·윤리', 5],
+  ]),
+};
 function subjectIndexFor(level: string, area: string): number {
   const m = (subjIndex[level] ??= new Map());
   if (!m.has(area)) m.set(area, m.size);
@@ -98,6 +118,10 @@ function ingestFile(path: string) {
   try { doc = yaml.load(readFileSync(path, 'utf8')); } catch { return; }
   const series = seriesOf(path);
   const level = levelOf(path);
+  // 작성도구 samples are reference material: bank folders were walked first (see
+  // main), so shared ids already deduped to the bank version; MCQs unique to a
+  // 작성도구 file land as 초안 (non-drawable).
+  const fromAuthoring = path.includes('작성도구');
   if (ONLY_SERIES && series !== ONLY_SERIES) return;
   if (ONLY_LEVEL && level !== ONLY_LEVEL) return;
 
@@ -158,7 +182,7 @@ function ingestFile(path: string) {
         riskTag: (meta.risk_tags ?? it.risk_tags ?? [])[0] ?? null,
         techAssumptionType: rec(it.validity_and_lifespan)?.tech_assumption_type ?? null,
         explanation: rec(it.explanation)?.correct_answer_reason ?? null,
-        sourceRef: id, lifecycleStatus: LIFECYCLE,
+        sourceRef: id, lifecycleStatus: fromAuthoring ? '초안' : LIFECYCLE,
       });
     } else if (it.rubric && (it.scenario || it.question)) {
       // ── L1 서술형 (Part C essay) ──
@@ -263,12 +287,21 @@ async function main() {
   console.log(`\nMode: ${DRY ? 'DRY RUN (no writes)' : REPLACE ? 'REPLACE (delete + insert)' : 'WRITE (upsert)'}` +
     `${ONLY_SERIES ? ` · series=${ONLY_SERIES}` : ''}${ONLY_LEVEL ? ` · level=${ONLY_LEVEL}` : ''} · lifecycle=${LIFECYCLE}\n`);
 
-  for (const f of walk(ROOT)) ingestFile(f);
+  // Bank folders first, 작성도구 last — so the 정합판/bank version of an item id
+  // wins the first-seen dedupe over its 작성도구 sample twin.
+  const files = walk(ROOT).sort((a, b) => {
+    const aa = a.includes('작성도구') ? 1 : 0;
+    const bb = b.includes('작성도구') ? 1 : 0;
+    return aa - bb || a.localeCompare(b);
+  });
+  for (const f of files) ingestFile(f);
 
   // report
   const by = (arr: any[], k: (x: any) => string) => arr.reduce<Record<string, number>>((m, x) => ((m[k(x)] = (m[k(x)] || 0) + 1), m), {});
   console.log('Parsed:');
   console.log('  MCQ       :', parsed.mcq.length, JSON.stringify(by(parsed.mcq, (x) => `${x.certType}/${x.level}`)));
+  const draftMcq = parsed.mcq.filter((q) => q.lifecycleStatus === '초안').length;
+  if (draftMcq) console.log(`              └ ${draftMcq} from 작성도구 samples → 초안 (non-drawable reference)`);
   console.log('  Practical :', parsed.practical.length, JSON.stringify(by(parsed.practical, (x) => `${x.certType}/${x.level}`)));
   console.log('  Essay     :', parsed.essay.length, JSON.stringify(by(parsed.essay, (x) => `${x.certType}/${x.level}`)));
 
