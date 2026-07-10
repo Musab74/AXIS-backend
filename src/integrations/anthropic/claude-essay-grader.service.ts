@@ -141,6 +141,7 @@ const LEVEL_GUIDANCE: Record<'L1' | 'L2' | 'L3', string> = {
 - "법규 위반 전제 계획" (개인정보 무단 활용 등 위법을 전제로 한 계획 제출)
 - "시나리오 밖 사실 창작" (제공 시나리오에 없는 사실을 창작해 인용)
 - "리스크 통제 섹션 백지·형식 기재" (백지 또는 형식적 한 줄 기재)
+위 패턴에 해당하는 위험을 발견해 위험 플래그를 기록했다면(특히 개인정보·사실 창작 관련 HIGH/CRITICAL), 반드시 대응하는 표준 명칭을 criticalFailCandidates에도 함께 기록하세요. 플래그만 남기고 후보 기재를 누락하는 것은 오류입니다 — 후보 기재는 불합격 확정이 아니라 전문가 검토 회부입니다.
 
 [위험 플래그] 통제어휘 11종만 사용: ${RISK_VOCAB_L1_L2.join(', ')}.`,
   L2: `[산출물-검증 일치 게이트 (L2)]
@@ -150,6 +151,7 @@ const LEVEL_GUIDANCE: Record<'L1' | 'L2' | 'L3', string> = {
 - "개인정보 AI 입력·산출물 잔존" (개인 식별 정보의 입력·잔존)
 - "허위·출처불명 수치 무검증 제출"
 - "제공 자료 밖 사실 창작"
+위 패턴에 해당하는 위험을 발견해 위험 플래그를 기록했다면(특히 개인정보·허위 수치·사실 창작 관련 HIGH/CRITICAL), 반드시 대응하는 표준 명칭을 criticalFailCandidates에도 함께 기록하세요. 플래그만 남기고 후보 기재를 누락하는 것은 오류입니다 — 후보 기재는 불합격 확정이 아니라 전문가 검토 회부입니다.
 
 [위험 플래그] 통제어휘 11종만 사용: ${RISK_VOCAB_L1_L2.join(', ')}.
 
@@ -307,7 +309,8 @@ function buildGradingTool(levelKey: 'L1' | 'L2' | 'L3', certType?: CertType) {
           ? {
               criticalFailCandidates: {
                 type: 'array' as const,
-                description: '치명 실패 후보 — 표준 명칭 그대로 (확정은 전문가).',
+                description:
+                  '치명 실패 후보 — 표준 명칭 그대로 (확정은 전문가). 치명 실패 패턴과 겹치는 위험 플래그(개인정보·사실 창작 등 HIGH/CRITICAL)를 기록했다면 이 배열에도 반드시 대응 표준 명칭을 기재.',
                 items: { type: 'string' as const, enum: [...criticalEnum] },
               },
             }

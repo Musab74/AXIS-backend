@@ -157,7 +157,10 @@ export function isCriticalRiskTag(tag: string): boolean {
  * result alongside the prompt hash; a version change requires re-baselining).
  */
 export const AI_GRADING_PROMPT_VERSION: Record<'L1' | 'L2' | 'L3', string> = {
-  L1: 'AXIS-L1-AI-SCORING-PROMPT-v1.0',
-  L2: 'AXIS-L2-AI-SCORING-PROMPT-v1.0',
+  // v1.1 (L1·L2): 치명 실패 후보 탐지 강화 — 치명 실패 패턴과 겹치는 위험 플래그
+  // 기록 시 criticalFailCandidates 동시 기재 의무화 (adversarial smoke의
+  // fabrication/PII 미지명 결함 수정). L3 프롬프트는 변경 없음(치명 실패 enum 없음).
+  L1: 'AXIS-L1-AI-SCORING-PROMPT-v1.1',
+  L2: 'AXIS-L2-AI-SCORING-PROMPT-v1.1',
   L3: 'AXIS-L3-AI-SCORING-PROMPT-v1.0',
 };
