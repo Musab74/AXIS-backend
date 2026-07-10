@@ -20,6 +20,7 @@
     "db:seed:exam": "ts-node prisma/seed-exam.ts",
     "db:seed:l3-practicals": "ts-node prisma/seed-l3-practicals.ts",
     "db:seed:v2-samples": "ts-node prisma/seed-v2-samples.ts",
+    "db:import-new": "ts-node prisma/import-new-questions.ts",
     "db:seed:math": "ts-node prisma/seed-math-questions.ts",
     "db:seed:questions": "ts-node prisma/seed-questions-csv.ts",
     "db:validate:questions": "ts-node prisma/validate-questions.ts",
