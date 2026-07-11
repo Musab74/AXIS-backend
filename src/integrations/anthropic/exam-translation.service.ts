@@ -12,14 +12,19 @@ import { createHash } from 'node:crypto';
  * exactly as it would a native submission. Real candidates are never affected
  * (isEnglishTestUser returns false unless the id matches the env var).
  *
- * Uses Sonnet (same model as the in-exam assistant). Never throws — on any
- * failure it returns the original Korean, so the exam is never blocked. A
- * content-hash cache means identical strings (reloads, repeated options) are
- * translated once per process.
+ * Uses Haiku (fastest model — translation is latency-critical: the candidate
+ * is blocked on the paper request). Never throws — on any failure it returns
+ * the original Korean, so the exam is never blocked. A content-hash cache
+ * means identical strings (reloads, repeated options) are translated once
+ * per process.
  */
-const MODEL_ID = 'claude-sonnet-4-6';
+const MODEL_ID = 'claude-haiku-4-5';
 const TIMEOUT_MS = 45_000;
-const MAX_BATCH = 60; // strings per call
+// Small batches fired IN PARALLEL: wall time ≈ one small call instead of the
+// sum of large sequential ones, and a 10-string response can't overflow
+// max_tokens (a 60-string batch could, silently degrading to Korean via the
+// JSON-parse fallback).
+const MAX_BATCH = 10;
 
 export interface TranslatableUser {
   id: string;
@@ -70,16 +75,45 @@ export class ExamTranslationService {
       if (cached != null) out[i] = cached;
       else pending.push({ idx: i, text: t });
     }
+    const chunks: { idx: number; text: string }[][] = [];
     for (let i = 0; i < pending.length; i += MAX_BATCH) {
-      const chunk = pending.slice(i, i + MAX_BATCH);
-      const translated = await this.translateBatch(chunk.map((c) => c.text), 'ko2en');
-      chunk.forEach((c, j) => {
-        const tr = translated[j];
-        if (tr) {
-          out[c.idx] = tr;
-          this.cache.set(this.ckey('ko2en', c.text), tr);
-        }
-      });
+      chunks.push(pending.slice(i, i + MAX_BATCH));
+    }
+    // All chunks concurrently — translateBatch never throws (degrades to the
+    // originals), so Promise.all cannot reject. Accept an output only if it
+    // is actually English: the model occasionally echoes or paraphrases the
+    // Korean back as perfectly valid JSON, which a parse check can't catch.
+    // Rejected items are NOT cached (caching would pin the Korean original
+    // as the "English" translation for the process lifetime) — they go to a
+    // one-shot individual retry below.
+    const hangulRatio = (s: string): number =>
+      ((s.match(/[가-힣]/g) ?? []).length) / Math.max(1, s.length);
+    const accept = (c: { idx: number; text: string }, tr: string | undefined): boolean => {
+      // 0.2 tolerates legitimately embedded Korean (quoted phrases the
+      // translation must preserve) while rejecting echoed/untranslated text.
+      if (!tr || tr === c.text || hangulRatio(tr) > 0.2) return false;
+      out[c.idx] = tr;
+      this.cache.set(this.ckey('ko2en', c.text), tr);
+      return true;
+    };
+    const failed = (
+      await Promise.all(
+        chunks.map(async (chunk) => {
+          const translated = await this.translateBatch(chunk.map((c) => c.text), 'ko2en');
+          return chunk.filter((c, j) => !accept(c, translated[j]));
+        }),
+      )
+    ).flat();
+    // One retry pass, item-by-item — a single-string JSON array is far harder
+    // for the model to malform. Still-failing items stay Korean (never throw).
+    if (failed.length > 0) {
+      this.logger.warn(`retrying ${failed.length} untranslated string(s) individually`);
+      await Promise.all(
+        failed.map(async (c) => {
+          const [tr] = await this.translateBatch([c.text], 'ko2en');
+          accept(c, tr);
+        }),
+      );
     }
     return out;
   }
@@ -103,9 +137,10 @@ export class ExamTranslationService {
       '번역문만 출력하세요(설명·따옴표 없이).' +
       lenRule;
     const result = await this.call(sys, text);
-    const ko = result ?? text;
-    this.cache.set(this.ckey('en2ko', text), ko);
-    return ko;
+    // Cache only real translations — caching the fallback would pin the
+    // untranslated English for the process lifetime.
+    if (result) this.cache.set(this.ckey('en2ko', text), result);
+    return result ?? text;
   }
 
   // ── internals ────────────────────────────────────────────────────────────
