@@ -124,17 +124,28 @@ export class DemoService {
 
     // 실습 — 채점하지 않고 "실제 시험과 동일한 형태"만 보여주기 위한 용도.
     // 모든 레벨(L3/L2/L1) 공통: 대표 실습 1개만 노출한다.
-    const tasks = await this.prisma.taskTemplate.findMany({
+    const taskSelect = {
+      id: true,
+      title: true,
+      scenario: true,
+      durationMin: true,
+      points: true,
+      taskType: true,
+    } as const;
+    let tasks = await this.prisma.taskTemplate.findMany({
       where: { certType, level },
-      select: {
-        id: true,
-        title: true,
-        scenario: true,
-        durationMin: true,
-        points: true,
-        taskType: true,
-      },
+      select: taskSelect,
     });
+    // 데모 전용 폴백: 해당 트랙에 실습 문항이 아직 없으면(예: AXIS_C/AXIS_H
+    // L3 — 실기 콘텐츠 미집필) 본 트랙(AXIS)의 동일 레벨 과제를 참고용으로
+    // 노출한다. 데모 실습은 저장·채점되지 않는 미리보기이므로 실제 시험
+    // 출제(TaskTemplate)에는 영향이 없다.
+    if (tasks.length === 0 && certType !== CertType.AXIS) {
+      tasks = await this.prisma.taskTemplate.findMany({
+        where: { certType: CertType.AXIS, level },
+        select: taskSelect,
+      });
+    }
 
     const practicalTasks: DemoPracticalTask[] = [];
     if (tasks.length > 0) {
