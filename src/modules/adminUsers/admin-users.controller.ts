@@ -17,6 +17,7 @@ import { AuthenticatedUser } from '../../common/types/authenticated-user';
 import { AdminUsersService } from './admin-users.service';
 import { SearchUsersDto } from './dto/search-users.dto';
 import { SearchExamineesDto } from './dto/search-examinees.dto';
+import { RevealPiiDto } from './dto/reveal-pii.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { IssuePenaltyDto } from './dto/issue-penalty.dto';
 import { ReleasePenaltyDto } from './dto/release-penalty.dto';
@@ -83,6 +84,33 @@ export class AdminUsersController {
   @ApiOperation({ summary: '관리자: 사용자 상세 조회' })
   getUserDetail(@Param('id') targetId: string): Promise<UserDetail> {
     return this.adminUsersService.getUserDetail(targetId);
+  }
+
+  @Post(':id/reset-password')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({
+    summary: '관리자: 비밀번호 초기화 (고정 임시 비밀번호 + 다음 로그인 시 변경 강제)',
+  })
+  resetPassword(
+    @Req() req: Request,
+    @Param('id') targetId: string,
+  ): Promise<{ ok: true; tempPassword: string }> {
+    const actor = req.user as AuthenticatedUser;
+    return this.adminUsersService.resetPassword(actor, targetId, this.extractIp(req));
+  }
+
+  @Post(':id/pii-reveal')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({
+    summary: '관리자: 마스킹된 연락처/생년월일 열람 (사유 필수, 감사 로그 저장)',
+  })
+  revealPii(
+    @Req() req: Request,
+    @Param('id') targetId: string,
+    @Body() dto: RevealPiiDto,
+  ): Promise<{ phone: string; birthDate: string | null }> {
+    const actor = req.user as AuthenticatedUser;
+    return this.adminUsersService.revealPii(actor, targetId, dto.reason, this.extractIp(req));
   }
 
   @Patch(':id/roles')

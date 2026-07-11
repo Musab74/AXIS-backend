@@ -19,7 +19,9 @@ import {
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../common/prisma.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-user';
+import { maskBirthDate, maskPhone } from '../../common/utils/pii-mask.util';
 import { RedisService } from '../../integrations/redis/redis.service';
+import { AuthSessionService } from '../auth/auth-session.service';
 import { LoginAuditService } from '../auth/login-audit.service';
 import { MAX_ATTEMPTS } from '../cbtSessions/exam-spec';
 import { getBonusAttempts, MAX_BONUS_ATTEMPTS } from '../cbtSessions/registration-bonus-attempts';
@@ -60,6 +62,8 @@ const AuditAction = {
   ROLE_REVOKED: 'ROLE_REVOKED',
   PENALTY_ISSUED: 'PENALTY_ISSUED',
   PENALTY_RELEASED: 'PENALTY_RELEASED',
+  PASSWORD_RESET: 'PASSWORD_RESET',
+  PII_REVEALED: 'PII_REVEALED',
 } as const;
 type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -124,6 +128,7 @@ export class AdminUsersService {
     private readonly certificates: CertificatesService,
     private readonly loginAudit: LoginAuditService,
     private readonly redis: RedisService,
+    private readonly authSessions: AuthSessionService,
   ) {}
 
   async searchUsers(dto: SearchUsersDto): Promise<SearchUsersResult> {
@@ -176,7 +181,7 @@ export class AdminUsersService {
 
     return {
       ...summary,
-      birthDate: user.birthDate,
+      birthDate: maskBirthDate(user.birthDate),
       gender: user.gender,
       rolesDetail: user.roles.map<UserRoleSummary>((r) => ({
         role: r.role,
@@ -357,6 +362,107 @@ export class AdminUsersService {
     });
   }
 
+  // ─── Password reset (admin-forced) ───────────────────────────────────────
+
+  /**
+   * Fixed temp password assigned by an admin reset. The account is flagged
+   * with `mustChangePassword` so the portal forces a change on next login.
+   */
+  static readonly TEMP_PASSWORD = 'aa123';
+
+  async resetPassword(
+    actorUser: AuthenticatedUser,
+    targetId: string,
+    ip: string,
+  ): Promise<{ ok: true; tempPassword: string }> {
+    if (actorUser.id === targetId) {
+      throw new ForbiddenException('본인 계정은 이 기능으로 초기화할 수 없습니다');
+    }
+    const target = await this.prisma.user.findUnique({ where: { id: targetId } });
+    if (!target) {
+      throw new NotFoundException('사용자를 찾을 수 없습니다');
+    }
+
+    const passwordHash = await bcrypt.hash(AdminUsersService.TEMP_PASSWORD, 12);
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: targetId },
+        data: { passwordHash, mustChangePassword: true },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId: actorUser.id,
+          action: AuditAction.PASSWORD_RESET,
+          entityType: 'USER',
+          entityId: targetId,
+          after: { mustChangePassword: true },
+        },
+      }),
+    ]);
+    // Kick any live session — the target must sign back in with the temp password.
+    await this.authSessions.revokeSession(targetId);
+
+    await this.writeAuditLog({
+      actorUser,
+      action: AuditAction.PASSWORD_RESET,
+      targetId,
+      targetName: target.name,
+      after: { mustChangePassword: true },
+      ip,
+    });
+
+    return { ok: true, tempPassword: AdminUsersService.TEMP_PASSWORD };
+  }
+
+  // ─── Audited PII reveal ──────────────────────────────────────────────────
+
+  /**
+   * Return the raw phone / birth date that list and detail endpoints mask.
+   * The audit row (with the admin's reason) is written first — if it cannot
+   * be persisted, the reveal is refused.
+   */
+  async revealPii(
+    actorUser: AuthenticatedUser,
+    targetId: string,
+    reason: string,
+    ip: string,
+  ): Promise<{ phone: string; birthDate: string | null }> {
+    // DTO MinLength doesn't trim — a whitespace-only reason would produce a
+    // meaningless audit trail, so reject it here.
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length < 2) {
+      throw new BadRequestException('열람 사유를 입력해주세요');
+    }
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, name: true, phone: true, birthDate: true },
+    });
+    if (!target) {
+      throw new NotFoundException('사용자를 찾을 수 없습니다');
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: actorUser.id,
+        action: AuditAction.PII_REVEALED,
+        entityType: 'USER',
+        entityId: targetId,
+        reason: trimmedReason,
+        after: { fields: ['phone', 'birthDate'] },
+      },
+    });
+    await this.writeAuditLog({
+      actorUser,
+      action: AuditAction.PII_REVEALED,
+      targetId,
+      targetName: target.name,
+      after: { fields: ['phone', 'birthDate'], reason: trimmedReason },
+      ip,
+    });
+
+    return { phone: target.phone, birthDate: target.birthDate };
+  }
+
   // ─── Expert (grader) management ──────────────────────────────────────────
 
   /**
@@ -426,7 +532,7 @@ export class AdminUsersService {
       userId: created.userId,
       name: created.name,
       email: created.email,
-      phone: created.phone,
+      phone: maskPhone(created.phone),
       accountStatus: created.accountStatus,
       competencies,
       activePenaltyCount: 0,
@@ -482,7 +588,7 @@ export class AdminUsersService {
       userId: target.userId,
       name: target.name,
       email: target.email,
-      phone: target.phone,
+      phone: maskPhone(target.phone),
       accountStatus: target.accountStatus,
       competencies: cleaned,
       activePenaltyCount: target.penalties.length,
@@ -506,7 +612,7 @@ export class AdminUsersService {
       userId: u.userId,
       name: u.name,
       email: u.email,
-      phone: u.phone,
+      phone: maskPhone(u.phone),
       accountStatus: u.accountStatus,
       competencies: u.expertCompetencies.map((c) => c.certType),
       activePenaltyCount: u.penalties.length,
@@ -564,7 +670,7 @@ export class AdminUsersService {
       userId: user.userId,
       name: user.name,
       email: user.email,
-      phone: user.phone,
+      phone: maskPhone(user.phone),
       accountStatus: user.accountStatus,
       niceVerified: user.niceVerified,
       roles,
@@ -826,11 +932,11 @@ export class AdminUsersService {
         id: user.id,
         userId: user.userId,
         name: user.name,
-        phone: user.phone,
+        phone: maskPhone(user.phone),
         email: user.email,
         accountStatus: user.accountStatus,
         niceVerified: user.niceVerified,
-        birthDate: user.birthDate,
+        birthDate: maskBirthDate(user.birthDate),
         gender: user.gender,
         createdAt: user.createdAt,
         lastLoginAt: user.lastLoginAt,
@@ -955,7 +1061,7 @@ export class AdminUsersService {
         id: r.user.id,
         userId: r.user.userId,
         name: r.user.name,
-        phone: r.user.phone,
+        phone: maskPhone(r.user.phone),
         email: r.user.email,
       },
       schedule: this.toExamineeSchedule(r.schedule),

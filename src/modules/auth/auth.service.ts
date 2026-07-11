@@ -430,6 +430,7 @@ export class AuthService {
         phone: user.phone,
         email: user.email,
         roles,
+        mustChangePassword: user.mustChangePassword,
       },
       ...tokens,
     };
@@ -558,7 +559,7 @@ export class AuthService {
 
     await this.prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash },
+      data: { passwordHash, mustChangePassword: false },
     });
     await this.authSessions.revokeSession(user.id);
 

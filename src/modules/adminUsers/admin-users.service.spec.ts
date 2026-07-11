@@ -186,11 +186,13 @@ function makeService() {
   const certs = makeCertsMock();
   const loginAudit = { getLoginHistory: jest.fn(async () => []) };
   const redis = { get: jest.fn(async () => null) };
+  const authSessions = { revokeSession: jest.fn(async () => undefined) };
   const svc = new AdminUsersService(
     m.prisma,
     certs as unknown as CertificatesService,
     loginAudit as never,
     redis as never,
+    authSessions as never,
   );
   return { svc, ...m, certs };
 }

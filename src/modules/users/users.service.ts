@@ -122,7 +122,7 @@ export class UsersService {
     const passwordHash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({
       where: { id: userDbId },
-      data: { passwordHash },
+      data: { passwordHash, mustChangePassword: false },
     });
     await this.authSessions.revokeSession(userDbId);
 

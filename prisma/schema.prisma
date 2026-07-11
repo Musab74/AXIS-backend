@@ -129,6 +129,9 @@ model User {
   ci                     String?       @unique @db.VarChar(500)
   di                     String?       @db.VarChar(500)
   niceVerified           Boolean       @default(false) @map("nice_verified")
+  /// Set when an admin resets the account to the fixed temp password; the
+  /// portal must force a password change before normal use and clear it.
+  mustChangePassword     Boolean       @default(false) @map("must_change_password")
   accountStatus          AccountStatus @default(ACTIVE) @map("account_status")
   referenceFaceImage     Bytes?        @map("reference_face_image") @db.LongBlob
   referenceFaceUpdatedAt DateTime?     @map("reference_face_updated_at")
