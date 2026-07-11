@@ -19,7 +19,9 @@
  * table if missing — that's existing behavior, not a schema change).
  */
 import { PrismaClient, CertType, CertLevel } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { DemoService } from './modules/demo/demo.service';
+import { ExamTranslationService } from './integrations/anthropic/exam-translation.service';
 import { CertificatesService } from './modules/certificates/certificates.service';
 
 const prisma = new PrismaClient();
@@ -38,7 +40,9 @@ function check(label: string, ok: boolean, detail = '') {
 }
 
 // Cast PrismaClient → the shape the services expect (PrismaService extends it).
-const demoSvc = new DemoService(prisma as never);
+// Keyless ConfigService → translation disabled; smoke never passes a user, so
+// the ENGLISH_TEST_USER gate stays off and papers come back in Korean.
+const demoSvc = new DemoService(prisma as never, new ExamTranslationService(new ConfigService()));
 const certSvc = new CertificatesService(prisma as never);
 
 async function testDemoPaper() {
@@ -46,7 +50,7 @@ async function testDemoPaper() {
   const paper = await demoSvc.getDemoPaper(CertType.AXIS, CertLevel.L3);
 
   check('returns 5 MCQs (was 10)', paper.questions.length === 5, `got ${paper.questions.length}`);
-  check('durationMin = 10', paper.durationMin === 10);
+  check('durationMin = 15', paper.durationMin === 15);
   check('certType echoed', paper.certType === CertType.AXIS);
   check('level echoed', paper.level === CertLevel.L3);
   check(

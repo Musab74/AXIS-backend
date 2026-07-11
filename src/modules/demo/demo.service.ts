@@ -2,6 +2,10 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { CertLevel, CertType } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
+import {
+  ExamTranslationService,
+  TranslatableUser,
+} from '../../integrations/anthropic/exam-translation.service';
 
 const DEMO_QUESTION_COUNT = 5;
 const DEMO_DURATION_MIN = 15;
@@ -79,13 +83,20 @@ function mapTaskToDemoPractical(t: {
 
 @Injectable()
 export class DemoService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly translation: ExamTranslationService,
+  ) {}
 
   /**
    * Public — picks a random subset of MCQs from the bank for the given cert+level.
    * Returns NO answer keys. The client posts back the chosen answers and we grade.
+   *
+   * `user` is optional (the endpoint is public); when it is the single
+   * ENGLISH_TEST_USER the paper is rendered in English — same QA/TEST-only
+   * gate as the real exam, never affecting real candidates.
    */
-  async getDemoPaper(certType: CertType, level: CertLevel) {
+  async getDemoPaper(certType: CertType, level: CertLevel, user?: TranslatableUser | null) {
     const all = await this.prisma.questionBank.findMany({
       where: { certType, level, type: 'MCQ', active: true },
       select: {
@@ -131,6 +142,12 @@ export class DemoService {
       practicalTasks.push(mapTaskToDemoPractical(t));
     }
 
+    // QA/TEST ONLY: English rendering for the single ENGLISH_TEST_USER.
+    // Degrades to Korean if translation fails; anonymous/other users skip.
+    if (this.translation.isEnglishTestUser(user)) {
+      await this.translatePaperToEnglish(questions, practicalTasks);
+    }
+
     // Deprecated single-task alias kept for one release so older shipped
     // frontends continue to render the first practical slot; new clients
     // should read `practicalTasks` (array).
@@ -144,6 +161,38 @@ export class DemoService {
       practicalTask,
       practicalTasks,
     };
+  }
+
+  /**
+   * Collect every candidate-facing string, translate once (batched, cached),
+   * write back in place. Mirrors CbtExamsService.translatePaperToEnglish.
+   * `taskType` stays Korean on purpose — the client maps the canonical Korean
+   * labels to localized text itself.
+   */
+  private async translatePaperToEnglish(
+    questions: DemoQuestion[],
+    practicalTasks: DemoPracticalTask[],
+  ): Promise<void> {
+    const strs: string[] = [];
+    const setters: ((v: string) => void)[] = [];
+    const add = (v: string | null | undefined, set: (v: string) => void) => {
+      if (v && v.trim()) {
+        strs.push(v);
+        setters.push(set);
+      }
+    };
+    for (const q of questions) {
+      add(q.stem, (v) => (q.stem = v));
+      add(q.subjectName, (v) => (q.subjectName = v));
+      for (const c of q.choices) add(c.text, (v) => (c.text = v));
+    }
+    for (const t of practicalTasks) {
+      add(t.title, (v) => (t.title = v));
+      add(t.scenario, (v) => (t.scenario = v));
+    }
+    if (strs.length === 0) return;
+    const translated = await this.translation.toEnglish(strs);
+    translated.forEach((v, i) => setters[i](v));
   }
 
   /**
@@ -180,12 +229,19 @@ export class DemoService {
    * Public — grades a demo submission against the question-bank correct answers.
    * No persistence. Returns score breakdown and per-question correctness so the
    * client can render a review screen.
+   *
+   * Grading itself is language-neutral (choice keys), so the ENGLISH_TEST_USER
+   * scores identically; only the review-screen strings in the response are
+   * translated for that user.
    */
-  async gradeDemo(input: {
-    certType: CertType;
-    level: CertLevel;
-    answers: { questionId: string; selectedChoice: string | null }[];
-  }) {
+  async gradeDemo(
+    input: {
+      certType: CertType;
+      level: CertLevel;
+      answers: { questionId: string; selectedChoice: string | null }[];
+    },
+    user?: TranslatableUser | null,
+  ) {
     const ids = input.answers.map((a) => a.questionId);
     const bank = await this.prisma.questionBank.findMany({
       where: { id: { in: ids }, certType: input.certType, level: input.level },
@@ -247,6 +303,29 @@ export class DemoService {
       total: agg.total,
       percentage: agg.total > 0 ? Math.round((agg.earned / agg.total) * 100) : 0,
     }));
+
+    // QA/TEST ONLY: English review screen for the single ENGLISH_TEST_USER.
+    // The per-string cache guarantees the same English text the paper showed.
+    if (this.translation.isEnglishTestUser(user)) {
+      const strs: string[] = [];
+      const setters: ((v: string) => void)[] = [];
+      const add = (v: string | null | undefined, set: (v: string) => void) => {
+        if (v && v.trim()) {
+          strs.push(v);
+          setters.push(set);
+        }
+      };
+      for (const b of breakdown) {
+        add(b.stem, (v) => (b.stem = v));
+        add(b.subjectName, (v) => (b.subjectName = v));
+        for (const c of b.choices) add(c.text, (v) => (c.text = v));
+      }
+      for (const s of subjectBreakdown) add(s.subjectName, (v) => (s.subjectName = v));
+      if (strs.length > 0) {
+        const translated = await this.translation.toEnglish(strs);
+        translated.forEach((v, i) => setters[i](v));
+      }
+    }
 
     return {
       certType: input.certType,
