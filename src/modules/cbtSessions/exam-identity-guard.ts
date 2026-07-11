@@ -43,3 +43,24 @@ export async function assertIdentityVerifiedForSession(
     throw new BadRequestException('이번 응시를 위한 신원 확인이 필요합니다.');
   }
 }
+
+/**
+ * Non-throwing variant for flow decisions (e.g. createFromRegistration must
+ * NOT auto-start a session whose identity step is still pending — the client
+ * needs the session back so it can route the candidate to the ID/face
+ * verification screen).
+ */
+export async function isIdentityVerifiedForSession(
+  prisma: PrismaService,
+  skipCheck: boolean,
+  userId: string,
+  sessionId: string,
+): Promise<boolean> {
+  if (skipCheck) return true;
+  try {
+    await assertIdentityVerifiedForSession(prisma, false, userId, sessionId);
+    return true;
+  } catch {
+    return false;
+  }
+}

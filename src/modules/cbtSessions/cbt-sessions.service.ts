@@ -25,7 +25,10 @@ import { MonitorHeartbeatService } from '../adminMonitor/monitor-heartbeat.servi
 import { AdminNotificationsService } from '../adminNotifications/admin-notifications.service';
 import { RedisService } from '../../integrations/redis/redis.service';
 import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-object-storage.service';
-import { assertIdentityVerifiedForSession } from './exam-identity-guard';
+import {
+  assertIdentityVerifiedForSession,
+  isIdentityVerifiedForSession,
+} from './exam-identity-guard';
 import { assertRegistrationActiveForSession } from './registration-active-guard';
 import { gradeTerminatedWrittenSection } from '../grading/written-scoring';
 
@@ -271,14 +274,26 @@ export class CbtSessionsService {
       });
     }
 
+    // Auto-start only when BOTH gates are already satisfied. A session can
+    // hold consent stamps without a fresh face verification (e.g. the flow
+    // was interrupted between the two) — auto-starting then would throw the
+    // identity error here and strand the candidate on the readiness page,
+    // unable to ever reach the ID/face screen. Returning the session instead
+    // lets the client proceed to /proctor and redo verification + start.
     if (
       session.status === ExamSessionStatus.CREATED &&
-      (await this.hasRequiredConsents(userId, session.id))
+      (await this.hasRequiredConsents(userId, session.id)) &&
+      (await isIdentityVerifiedForSession(
+        this.prisma,
+        this.skipIdentityCheck(),
+        userId,
+        session.id,
+      ))
     ) {
       return this.start(userId, session.id);
     }
-    // Awaiting consent — let the client present the consent UI then call
-    // POST /cbt/sessions/:id/consent followed by POST /cbt/sessions/:id/start.
+    // Awaiting consent and/or identity verification — the client presents the
+    // proctor flow (ID + face + consent) then calls POST /cbt/sessions/:id/start.
     return session;
   }
 
