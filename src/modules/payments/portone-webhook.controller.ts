@@ -1,12 +1,19 @@
 /**
- * PORTONE WEBHOOK REGISTRATION
- * Registered in PortOne console (admin.portone.io → 결제모듈 V1 → 웹훅 관리):
+ * PORTONE WEBHOOK REGISTRATION — V2 (active, PORTONE_MODULE_VERSION=v2)
+ * Registered in PortOne console (admin.portone.io → 결제 연동(V2) → 웹훅 관리):
  *   https://axisexam.com/api/webhooks/portone   (Content-Type: application/json)
- * — verified 2026-07-10: Apache strips /api and forwards to Nest's
- * /webhooks/portone (https://api.axisexam.com/webhooks/portone also works).
- * Register the URL under BOTH 테스트 and 실연동 modes — PortOne keeps them
- * separate. After deploying, the console's 호출 테스트 must return 200
- * (403 = the old rawBody bug is still deployed).
+ * — Apache strips /api and forwards to Nest's /webhooks/portone
+ * (https://api.axisexam.com/webhooks/portone also works). Copy the endpoint's
+ * webhook secret (whsec_...) into PORTONE_WEBHOOK_SECRET — V2 webhooks are
+ * signed (standard-webhooks) and PortoneV2Gateway.verifyWebhook rejects any
+ * payload whose signature does not match.
+ *
+ * Events to subscribe (V2 console):
+ * - Transaction.Paid
+ * - Transaction.Cancelled
+ * - Transaction.Failed
+ * - Transaction.VirtualAccountIssued
+ *
  * NOTE: PortOne only auto-retries webhooks on network error / 5xx — a 4xx
  * response is silently dropped, which is why PaymentsReconciliationService
  * sweeps PENDING payments as a backstop.
@@ -15,11 +22,10 @@
  * ngrok http 3333
  * → Register: https://xxxxx.ngrok.io/webhooks/portone
  *
- * Events to subscribe (V1 console: 결제알림(웹훅) — sends paid/ready/cancelled/failed):
- * - Transaction.Paid
- * - Transaction.Cancelled
- * - Transaction.Failed
- * - Transaction.VirtualAccountIssued
+ * LEGACY V1 (PORTONE_MODULE_VERSION=v1 fallback only): register the same URL
+ * under 결제모듈 V1 → 웹훅 관리, in BOTH 테스트 and 실연동 modes — PortOne
+ * keeps them separate. V1 callbacks are UNSIGNED; the console's 호출 테스트
+ * must return 200 (403 = the old rawBody bug is still deployed).
  *
  * SECURITY: webhook bodies are untrusted triggers — every event is re-fetched
  * from the PG API before any DB state changes (see PortoneApplyService
