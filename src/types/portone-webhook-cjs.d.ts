@@ -1,4 +1,4 @@
-declare module '@portone/server-sdk/dist/webhook.cjs' {
+declare module '@portone/server-sdk/webhook' {
   export function verify(
     secret: string | Uint8Array,
     payload: string,

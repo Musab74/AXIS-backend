@@ -25,8 +25,23 @@ import {
 const ORDER_TTL_SECONDS = 1800;
 const PAYMENT_NETWORK_RETRY_LIMIT = 3;
 
+/** KCP V2 (PortOne) rejects merchant order / paymentId longer than 40 chars. */
+const PORTONE_ORDER_ID_MAX_LEN = 40;
+
+/**
+ * Build a merchant order id that stays within KCP V2's 40-char limit.
+ * Old format `AXIS-{cuid}-{ms}` is 44 chars (5+25+1+13) and breaks the payment window.
+ */
 function buildPortoneMerchantOrderId(registrationId: string): string {
-  return `AXIS-${registrationId}-${Date.now()}`;
+  const ts = Date.now().toString(36); // ~8 chars
+  const rand = Math.random().toString(36).slice(2, 6);
+  const reg = registrationId.replace(/[^a-zA-Z0-9]/g, '').slice(-12);
+  const id = `AX${reg}${ts}${rand}`;
+  return id.length <= PORTONE_ORDER_ID_MAX_LEN ? id : id.slice(0, PORTONE_ORDER_ID_MAX_LEN);
+}
+
+function needsNewPortoneOrderId(orderId: string | undefined | null): boolean {
+  return !orderId || orderId.length > PORTONE_ORDER_ID_MAX_LEN;
 }
 
 async function createPendingPaymentOrReuseOnRace(
@@ -305,19 +320,27 @@ export class PortoneApplyService {
       }
     }
 
-    const orderId = existingPortone?.paymentKey
-      ? buildPortoneMerchantOrderId(registrationId)
-      : existingPortone?.orderId ?? buildPortoneMerchantOrderId(registrationId);
-
+    // Reuse pending row when VA not yet issued. Legacy `AXIS-{cuid}-{ms}` ids are
+    // 44 chars and break KCP V2 (max 40) — rewrite those in place before returning.
     let paymentRow =
       existingPortone && !existingPortone.paymentKey
         ? existingPortone
         : await createPendingPaymentOrReuseOnRace(
             this.prisma,
             registration.id,
-            orderId,
+            buildPortoneMerchantOrderId(registrationId),
             fee,
           );
+
+    if (needsNewPortoneOrderId(paymentRow.orderId)) {
+      const previousOrderId = paymentRow.orderId;
+      const orderId = buildPortoneMerchantOrderId(registrationId);
+      paymentRow = await this.prisma.payment.update({
+        where: { id: paymentRow.id },
+        data: { orderId },
+      });
+      await this.redis.del(`payment:orderId:${previousOrderId}`);
+    }
 
     if (paymentRow.amount !== fee) {
       paymentRow = await this.prisma.payment.update({
