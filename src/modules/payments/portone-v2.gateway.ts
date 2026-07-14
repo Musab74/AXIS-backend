@@ -40,7 +40,8 @@ export class PortoneV2Gateway implements PortoneGateway {
     headers: Record<string, string | string[] | undefined>,
   ): Promise<NormalizedWebhookEvent[]> {
     const secret = await this.webhookSecret.getSecret();
-    const { verify } = (await import('@portone/server-sdk/dist/webhook.cjs')) as {
+    // Package export is `@portone/server-sdk/webhook` (not `./dist/webhook.cjs`).
+    const { verify } = (await import('@portone/server-sdk/webhook')) as {
       verify: (
         s: string | Uint8Array,
         payload: string,

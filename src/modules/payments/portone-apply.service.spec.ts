@@ -25,7 +25,7 @@ describe('PortoneApplyService', () => {
     $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
   };
 
-  const redis = { set: jest.fn(async () => undefined) };
+  const redis = { set: jest.fn(async () => undefined), del: jest.fn(async () => undefined) };
 
   const configKeys: Record<string, string | number> = {
     'portone.moduleVersion': 'v2',
@@ -101,6 +101,41 @@ describe('PortoneApplyService', () => {
       expect(prisma.payment.create).not.toHaveBeenCalled();
       expect(result.merchantId).toBe('AXIS-reg-1-1');
       expect(result.alreadyIssued).toBe(false);
+    });
+
+    it('rewrites legacy orderIds longer than KCP V2 40-char limit', async () => {
+      const legacyOrderId = `AXIS-${'c'.repeat(25)}-${Date.now()}`;
+      expect(legacyOrderId.length).toBeGreaterThan(40);
+
+      prisma.registration.findUnique.mockResolvedValueOnce(baseReg);
+      prisma.certificationLevel.findFirst.mockResolvedValueOnce({ fee: 100_000 });
+      prisma.payment.findFirst.mockResolvedValueOnce({
+        id: 'pay-long',
+        orderId: legacyOrderId,
+        amount: 100_000,
+        paymentKey: null,
+        rawResponse: null,
+      });
+      prisma.payment.update.mockResolvedValueOnce({
+        id: 'pay-long',
+        orderId: 'AXrewritten1234567890abcd',
+        amount: 100_000,
+        paymentKey: null,
+        rawResponse: null,
+      });
+
+      const result = await svc().applyPaymentRequest('user-1', 'reg-1');
+
+      expect(prisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'pay-long' },
+          data: expect.objectContaining({ orderId: expect.any(String) }),
+        }),
+      );
+      const newOrderId = (prisma.payment.update as jest.Mock).mock.calls[0][0].data.orderId as string;
+      expect(newOrderId.length).toBeLessThanOrEqual(40);
+      expect(result.merchantId).toBe('AXrewritten1234567890abcd');
+      expect(redis.del).toHaveBeenCalledWith(`payment:orderId:${legacyOrderId}`);
     });
 
     it('returns the existing PENDING row when create races on duplicate order_id', async () => {
