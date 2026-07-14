@@ -20,7 +20,7 @@ import {
 import { PrismaService } from '../../common/prisma.service';
 import { RedisService } from '../../integrations/redis/redis.service';
 import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-object-storage.service';
-import { MAX_ATTEMPTS } from '../cbtSessions/exam-spec';
+import { isSeriesSuspended, MAX_ATTEMPTS } from '../cbtSessions/exam-spec';
 import {
   BONUS_ATTEMPTS_KEY,
   getBonusAttempts,
@@ -603,12 +603,29 @@ export class RegistrationsService {
     );
   }
 
+  /**
+   * Refuse a registration for a suspended series (SUSPENDED_SERIES env).
+   *
+   * AXIS-C / AXIS-H have no question bank after the v3 cutover and reopen in
+   * September. Blocking at REGISTRATION (not just at exam start) means a
+   * candidate can never pay for an exam they cannot sit.
+   */
+  private assertSeriesOperating(certType: CertType): void {
+    if (!isSeriesSuspended(certType)) return;
+    const label = certType.replace('_', '-');
+    throw new ConflictException(
+      `${label} 시험은 현재 접수가 중단되었습니다. 9월부터 재개될 예정입니다. ` +
+        `(${label} registration is currently closed. It reopens in September.)`,
+    );
+  }
+
   async create(userId: string, scheduleId: string) {
     // Virtual on-demand slots (L1/L2/L3) are synthesized by /schedules/slots and
     // only become real ExamSchedule rows when a candidate registers —
     // materialize here before running the seat-hold/capacity checks below.
     const virtual = parseVirtualSlotId(scheduleId);
     if (virtual) {
+      this.assertSeriesOperating(virtual.certType);
       const materialized = await this.schedules.findOrCreateForSlot({
         certType: virtual.certType,
         level: virtual.level,
@@ -620,6 +637,7 @@ export class RegistrationsService {
     await this.releaseExpiredSeatHolds();
     const schedule = await this.prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!schedule) throw new NotFoundException('Schedule not found');
+    this.assertSeriesOperating(schedule.certType);
 
     if (
       schedule.status !== ScheduleStatus.REGISTRATION_OPEN &&
@@ -1125,6 +1143,7 @@ export class RegistrationsService {
    * If examDate is not provided, creates a schedule for immediate start.
    */
   async quickBook(userId: string, dto: QuickBookDto) {
+    this.assertSeriesOperating(dto.certType);
     await this.releaseExpiredSeatHolds();
     // Create or find an on-demand schedule
     const examDate = dto.examDate ?? new Date().toISOString();
