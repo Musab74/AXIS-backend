@@ -3,7 +3,15 @@ import { ConfigService } from '@nestjs/config';
 import { CertLevel, CertType, ExamSessionStatus, Prisma, ProctorEventType, RegistrationStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
-import { currentSpecVersion, getTiming, getExamSpec, isV2OrLater, MAX_ATTEMPTS, toSpecVersion } from './exam-spec';
+import {
+  currentSpecVersion,
+  getTiming,
+  getExamSpec,
+  isSeriesSuspended,
+  isV2OrLater,
+  MAX_ATTEMPTS,
+  toSpecVersion,
+} from './exam-spec';
 import {
   auditAnswerPositions,
   bankBlueprintFor,
@@ -136,7 +144,27 @@ export class CbtSessionsService {
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * Block a NEW session for a suspended series (SUSPENDED_SERIES env).
+   *
+   * Used when a series' question bank has been withdrawn — e.g. AXIS-C/AXIS-H
+   * were purged in the v3 cutover and reopen in September. Without this the
+   * candidate would reach the paper draw and hit the raw developer error
+   * "Question bank empty for this exam". Sessions already in progress, submitted
+   * papers and issued certificates are untouched.
+   */
+  private assertSeriesOperating(certType: CertType): void {
+    if (!isSeriesSuspended(certType)) return;
+    const label = certType.replace('_', '-');
+    this.logger.warn(JSON.stringify({ msg: 'session_blocked_suspended_series', certType }));
+    throw new BadRequestException(
+      `${label} 시험은 현재 운영이 중단되어 응시할 수 없습니다. 재개 일정은 공지사항을 확인해 주세요. ` +
+        `(The ${label} exam is currently suspended and cannot be taken. Please check the notices for the reopening date.)`,
+    );
+  }
+
   async create(userId: string, certType: CertType, level: CertLevel) {
+    this.assertSeriesOperating(certType);
     const lastAttempt = await this.prisma.examSession.findFirst({
       where: { userId, certType, level },
       orderBy: { attemptNo: 'desc' },
@@ -174,6 +202,7 @@ export class CbtSessionsService {
     });
     if (!registration) throw new NotFoundException('Registration not found');
     if (registration.userId !== userId) throw new ForbiddenException('Not your registration');
+    this.assertSeriesOperating(registration.certType);
     if (registration.status !== RegistrationStatus.PAID) {
       // EXAM_COMPLETED carries a richer meaning than a raw "not PAID" — the
       // candidate either already passed or burned all 3 attempts. Show a

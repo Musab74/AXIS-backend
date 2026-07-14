@@ -44,6 +44,28 @@ export function isV2OrLater(v: ExamSpecVersion): boolean {
 /** Raw column values for Prisma where-clauses (`specVersion: { in: V2_OR_LATER_VERSIONS }`). */
 export const V2_OR_LATER_VERSIONS: readonly string[] = ['2.0', '3.0'];
 
+/**
+ * Certification series whose exams are SUSPENDED — no new sessions may start.
+ *
+ * Set via `SUSPENDED_SERIES` (comma-separated, e.g. "AXIS_C,AXIS_H"). Used when a
+ * series' question bank has been withdrawn: without this guard a candidate would
+ * hit the raw "Question bank empty" developer error at exam start. Existing
+ * sessions, submitted papers and issued certificates are untouched — this only
+ * blocks NEW sessions.
+ */
+export function suspendedSeries(): Set<string> {
+  return new Set(
+    (process.env.SUSPENDED_SERIES ?? '')
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean),
+  );
+}
+
+export function isSeriesSuspended(certType: CertType): boolean {
+  return suspendedSeries().has(certType);
+}
+
 export interface LevelTiming {
   totalMinutes: number;
   writtenMinutes: number;
