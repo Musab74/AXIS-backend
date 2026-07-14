@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { CertType, ExamSessionStatus, Prisma, RegistrationStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
+import { isV2OrLater, toSpecVersion } from '../cbtSessions/exam-spec';
 
 // 자격 유효기간: 등급 취득일로부터 2년 (메인 기획서 v2.0 2-5 — AI 기술 변화
 // 속도를 반영한 역량 시효). Was 3; corrected to the documented 2 years.
@@ -207,11 +208,11 @@ export class CertificatesService {
 
     if (!session) return null;
     if (session.status !== ExamSessionStatus.GRADED || session.passed !== true) return null;
-    // v2.0 (시험 표준 v2.0 WP4) hard guard: the final decision is human-locked —
-    // a v2.0 session can only yield a certificate once an admin/review panel
-    // confirmed it (decision_status = CONFIRMED_PASS). Provisional or
+    // v2.0+ (시험 표준 v2.0 WP4) hard guard: the final decision is human-locked —
+    // a v2.0/v3.0 session can only yield a certificate once an admin/review
+    // panel confirmed it (decision_status = CONFIRMED_PASS). Provisional or
     // in-review states never issue, no matter who calls this.
-    if (session.specVersion === '2.0' && session.decisionStatus !== 'CONFIRMED_PASS') {
+    if (isV2OrLater(toSpecVersion(session.specVersion)) && session.decisionStatus !== 'CONFIRMED_PASS') {
       return null;
     }
     const registration = session.registrationId

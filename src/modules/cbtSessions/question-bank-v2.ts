@@ -113,6 +113,12 @@ export interface LevelBankBlueprint {
   difficultyDistribution: Record<string, number>;
   /** 문항유형 분포 per form (exact tag → count). */
   typeDistribution: Record<string, number>;
+  /**
+   * 평가영역 분포 per form (subjectIndex → count). L3 v3.0 cross-blueprint
+   * (영역 × 유형). Best-effort — enforced via the subjectIndex draw when the
+   * pool is area-tagged. Optional; absent for levels without an area axis.
+   */
+  areaDistribution?: Record<number, number>;
   /** Ops bank-size floor — log a warning when the drawable pool is below. */
   minBankSize: number;
   /** Anchor items: share of forms carrying them (10–15%). */
@@ -149,6 +155,9 @@ export const BANK_BLUEPRINTS_V2: Record<CertLevel, LevelBankBlueprint> = {
       지시설계형: 6,
       '개념·한계 판단형': 4,
     },
+    // 6 평가영역 × 40문항 (subjectIndex 0–5 ↔ 영역 01–06): AI현실 5 · 문제정의 6
+    // · 지시설계 7 · 산출물검증 8 · 산출물수정 6 · 보안윤리 8.
+    areaDistribution: { 0: 5, 1: 6, 2: 7, 3: 8, 4: 6, 5: 8 },
     minBankSize: 400,
     anchorShare: { min: 0.1, max: 0.15 },
     pretest: { ...COMMON_PRETEST, correctRateBands: COMMON_BANDS },
@@ -186,6 +195,22 @@ export const BANK_BLUEPRINTS_V2: Record<CertLevel, LevelBankBlueprint> = {
     pretest: { ...COMMON_PRETEST, correctRateBands: COMMON_BANDS },
   },
 };
+
+/**
+ * Blueprint for a level, with v3.0 overrides applied. v3 raises the L3 pretest
+ * cap 4 → 8 (paper doubles the practical count and the 확정안 allows up to
+ * 8 사전검증 문항/form). All other fields are shared with v2.0.
+ */
+export function bankBlueprintFor(
+  level: CertLevel,
+  specVersion: '1.1' | '2.0' | '3.0',
+): LevelBankBlueprint {
+  const base = BANK_BLUEPRINTS_V2[level];
+  if (specVersion === '3.0' && level === 'L3') {
+    return { ...base, maxPretestPerForm: 8 };
+  }
+  return base;
+}
 
 /** L3 practical pool floor: ≥ 10 items per practice type (ops warning). */
 export const L3_PRACTICAL_MIN_PER_TYPE = 10;

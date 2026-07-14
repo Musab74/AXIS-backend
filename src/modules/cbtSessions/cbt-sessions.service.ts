@@ -3,10 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { CertLevel, CertType, ExamSessionStatus, Prisma, ProctorEventType, RegistrationStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
-import { currentSpecVersion, getTiming, getExamSpec, MAX_ATTEMPTS, toSpecVersion } from './exam-spec';
+import { currentSpecVersion, getTiming, getExamSpec, isV2OrLater, MAX_ATTEMPTS, toSpecVersion } from './exam-spec';
 import {
   auditAnswerPositions,
-  BANK_BLUEPRINTS_V2,
+  bankBlueprintFor,
   isDrawablePretest,
   isDrawableScored,
   L3_PRACTICAL_MIN_PER_TYPE,
@@ -431,7 +431,7 @@ export class CbtSessionsService {
 
       // Ops bank-size floor (v2.0): warn (never block) when the drawable pool
       // is below the level's operating minimum.
-      const blueprint = BANK_BLUEPRINTS_V2[s.level];
+      const blueprint = bankBlueprintFor(s.level, specVersion);
       if (allQuestions.length < blueprint.minBankSize) {
         this.logger.warn(
           JSON.stringify({
@@ -454,7 +454,7 @@ export class CbtSessionsService {
         (q) => normalizeDifficulty(q.difficulty) != null,
       ).length;
       const useDifficultyDraw =
-        specVersion === '2.0' &&
+        isV2OrLater(specVersion) &&
         !!blueprint.difficultyDistribution &&
         // require most of the pool to be tagged, else the draw would be mostly backfill
         difficultyTagged >= Math.ceil(allQuestions.length * 0.5);
@@ -508,7 +508,7 @@ export class CbtSessionsService {
       // and record answers for statistics, but contribute 0 to every score
       // and are excluded from all gate math (Answer.isPretest).
       const pretestQuestions =
-        specVersion === '2.0' && pretestPool.length > 0
+        isV2OrLater(specVersion) && pretestPool.length > 0
           ? shuffleWithSeed(pretestPool, seed + 7).slice(0, blueprint.maxPretestPerForm)
           : [];
       const pretestIds = new Set(pretestQuestions.map((q) => q.id));
@@ -600,10 +600,11 @@ export class CbtSessionsService {
         let chosenTasks: typeof allTasks = [];
 
         if (s.level === 'L3') {
-          // L3 운영기획서: 4 실습형 must be one-per-type (현업적용·지시설계·
-          // 분석검증·리스크판단). Stratify by `taskType` and pick a different
-          // task per type using a type-scoped seed so two candidates in the
-          // same round don't always get the same 4 items.
+          // L3 운영기획서: 실습형 must be evenly split across the 4 types
+          // (현업적용·지시설계·분석검증·리스크판단). v2.0 draws 1/유형 (4문항),
+          // v3.0 draws 2/유형 (8문항 = 세트 A). Stratify by `taskType` and pick
+          // per-type using a type-scoped seed so two candidates in the same
+          // round don't always get the same items.
           const byType = new Map<string, typeof allTasks>();
           for (const t of allTasks) {
             if (!t.taskType) continue;
@@ -613,6 +614,7 @@ export class CbtSessionsService {
             byType.set(key, list);
           }
           const wantedTypes = ['현업적용형', '지시설계형', '분석검증형', '리스크판단형'];
+          const perType = Math.max(1, Math.floor(examSpec.practicalTaskCount / wantedTypes.length));
           for (const type of wantedTypes) {
             const pool = byType.get(type);
             // v2.0 ops floor: ≥ L3_PRACTICAL_MIN_PER_TYPE items per type.
@@ -628,7 +630,7 @@ export class CbtSessionsService {
               );
             }
             if (pool && pool.length > 0) {
-              // v2.0 난이도 고정 (중·중·상·상): prefer an item whose difficulty
+              // v2.0 난이도 고정 (중·중·상·상): prefer items whose difficulty
               // matches this type's required band; fall back to any item in the
               // type pool (with a warning) so the section is never short.
               const wantBand = PRACTICAL_DIFFICULTY_BY_TYPE[type];
@@ -647,7 +649,14 @@ export class CbtSessionsService {
                   }),
                 );
               }
-              chosenTasks.push((banded.length > 0 ? banded : shuffledPool)[0]);
+              // Take perType, preferring banded items then topping up from the
+              // rest of the type pool (deduped) so each type contributes its
+              // share even when the banded pool is thin.
+              const ordered = [
+                ...banded,
+                ...shuffledPool.filter((t) => !banded.includes(t)),
+              ];
+              chosenTasks.push(...ordered.slice(0, perType));
             }
           }
           // Defensive fallback: if any type was missing from the DB (e.g. flag
@@ -660,6 +669,41 @@ export class CbtSessionsService {
             const filler = shuffleWithSeed(remaining, `${seed}:practical:filler`).slice(
               0,
               examSpec.practicalTaskCount - chosenTasks.length,
+            );
+            chosenTasks.push(...filler);
+          }
+        } else if (s.level === 'L1' && specVersion === '3.0') {
+          // L1 v3.0: the imported bank stores Part B (실행계획서, DELIVERABLE) and
+          // Part C (서술형, ESSAY) as separate singleton sets — the setNo-coherent
+          // path cannot compose a paper. Draw 1 DELIVERABLE + 1 ESSAY per essay
+          // type group (리스크대응형 · 변화관리성과관리형).
+          const deliverables = allTasks.filter((t) => t.part === 'DELIVERABLE');
+          const essays = allTasks.filter((t) => t.part === 'ESSAY');
+          if (deliverables.length > 0) {
+            chosenTasks.push(shuffleWithSeed(deliverables, `${seed}:practical:B`)[0]);
+          }
+          const byEssayType = new Map<string, typeof allTasks>();
+          for (const t of essays) {
+            const key = t.taskType ?? '';
+            const list = byEssayType.get(key) ?? [];
+            list.push(t);
+            byEssayType.set(key, list);
+          }
+          const essayTypes = Array.from(byEssayType.keys()).sort();
+          const wantedEssays = Math.max(0, examSpec.practicalTaskCount - 1);
+          for (const type of essayTypes) {
+            if (chosenTasks.filter((t) => t.part === 'ESSAY').length >= wantedEssays) break;
+            const pool = byEssayType.get(type)!;
+            chosenTasks.push(shuffleWithSeed(pool, `${seed}:practical:C:${type}`)[0]);
+          }
+          // Filler: if fewer than 2 distinct essay types exist, top up from the
+          // remaining essays so Part C still has 2 questions.
+          if (chosenTasks.filter((t) => t.part === 'ESSAY').length < wantedEssays) {
+            const chosenIds = new Set(chosenTasks.map((t) => t.id));
+            const remaining = essays.filter((t) => !chosenIds.has(t.id));
+            const filler = shuffleWithSeed(remaining, `${seed}:practical:C:filler`).slice(
+              0,
+              wantedEssays - chosenTasks.filter((t) => t.part === 'ESSAY').length,
             );
             chosenTasks.push(...filler);
           }
@@ -709,10 +753,11 @@ export class CbtSessionsService {
           paperSeed: seed,
           startedAt,
           hardDeadline,
-          // v2.0 L2 audit (WP5): the embedded-AI model+version is fixed per
-          // exam round and recorded on the session (기획서 v2.0 3-3). The env
-          // override lets ops pin a round-specific version string.
-          ...(specVersion === '2.0' && s.level === CertLevel.L2
+          // v2.0+ L2 audit (WP5): the embedded-AI model+version is fixed per
+          // exam round and recorded on the session (기획서 3-3). The env
+          // override lets ops pin a round-specific version string. The v3 L2
+          // aggregate schema still REQUIRES embedded_ai_version.
+          ...(isV2OrLater(specVersion) && s.level === CertLevel.L2
             ? {
                 embeddedAiVersion:
                   process.env.EMBEDDED_AI_VERSION || 'claude-sonnet-4-6',

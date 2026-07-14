@@ -5,6 +5,7 @@ import {
   computeWeightedResult,
   getScoring,
   getTiming,
+  isV2OrLater,
   toSpecVersion,
 } from '../cbtSessions/exam-spec';
 import { CertificatesService } from '../certificates/certificates.service';
@@ -108,7 +109,9 @@ export class L3AutoFinalizeService {
       return false;
     }
 
-    if (toSpecVersion(session.specVersion) === '2.0') {
+    // v2.0+ stages PROVISIONAL (human locks the decision); only v1.1 takes the
+    // legacy GRADED + auto-certificate path.
+    if (isV2OrLater(toSpecVersion(session.specVersion))) {
       await this.stageProvisional(session, tasks, writtenPct);
     } else {
       await this.gradeGraded(session, tasks, writtenPct);

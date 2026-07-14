@@ -1,21 +1,24 @@
-import { CertLevel, CertType, ExamPart } from '@prisma/client';
+﻿import { CertLevel, CertType, ExamPart } from '@prisma/client';
 
 /**
  * Exam standard version. Every rule that changed in 시험 표준 v2.0 (2026-07-05)
- * keys off the version STORED ON THE SESSION (`ExamSession.specVersion`), never
- * a global constant alone, so in-flight sessions keep the rules they started
- * under:
+ * and v3.0 (new_version_v3 확정안, 2026-07-11) keys off the version STORED ON THE
+ * SESSION (`ExamSession.specVersion`), never a global constant alone, so
+ * in-flight sessions keep the rules they started under:
  *   - "1.1": pre-v2.0 rules (existing sessions default here).
  *   - "2.0": v2.0 rules — L3 70분(객관식 50 + 실습 20), 이중 최저기준 하드컷,
  *     명시적 경계밴드, human-locked 판정 상태.
+ *   - "3.0": new_version_v3 확정안 — L3 90분/실습 8문항, L2 120분, L1 150분;
+ *     총점 60 하드컷 + 40% 과락(L2 실습·L1 Part B는 60% 유지), L1 Part C 하드컷 신설.
  */
-export type ExamSpecVersion = '1.1' | '2.0';
+export type ExamSpecVersion = '1.1' | '2.0' | '3.0';
 
-export const EXAM_SPEC_VERSIONS: readonly ExamSpecVersion[] = ['1.1', '2.0'];
+export const EXAM_SPEC_VERSIONS: readonly ExamSpecVersion[] = ['1.1', '2.0', '3.0'];
 
 /**
- * Version stamped on NEW sessions. Env override (`EXAM_SPEC_VERSION=1.1`) exists
- * only as an operational escape hatch during the v2.0 rollout window.
+ * Version stamped on NEW sessions. Default stays '2.0' during the v3.0 rollout;
+ * `EXAM_SPEC_VERSION=3.0` opts an environment in (and `=1.1` remains the legacy
+ * escape hatch).
  */
 export function currentSpecVersion(): ExamSpecVersion {
   const raw = (process.env.EXAM_SPEC_VERSION || '2.0').trim();
@@ -24,8 +27,22 @@ export function currentSpecVersion(): ExamSpecVersion {
 
 /** Narrows a persisted `ExamSession.specVersion` string to a known version (unknown → "1.1"). */
 export function toSpecVersion(raw: string | null | undefined): ExamSpecVersion {
-  return raw === '2.0' ? '2.0' : '1.1';
+  return raw === '3.0' ? '3.0' : raw === '2.0' ? '2.0' : '1.1';
 }
+
+/**
+ * True for every spec version that uses the v2.0+ machinery (hard-cut gates,
+ * human-locked decisions, PROVISIONAL staging, pretest embedding, difficulty
+ * draw, embedded-AI policy by level). Use this — never `=== '2.0'` — at any
+ * fork that means "v2 or later"; a missed site makes a '3.0' session silently
+ * behave like v1.1 (auto-cert, AI unblocked, no staging).
+ */
+export function isV2OrLater(v: ExamSpecVersion): boolean {
+  return v !== '1.1';
+}
+
+/** Raw column values for Prisma where-clauses (`specVersion: { in: V2_OR_LATER_VERSIONS }`). */
+export const V2_OR_LATER_VERSIONS: readonly string[] = ['2.0', '3.0'];
 
 export interface LevelTiming {
   totalMinutes: number;
@@ -134,16 +151,50 @@ const L3_TIMING_WITH_PRACTICALS_V2: LevelTiming = {
   subjectFailPct: 40,
 };
 
+const L3_TIMING_WITH_PRACTICALS_V3: LevelTiming = {
+  // 시험 표준 v3.0 (AXIS_L3_검정시간·합격선_확정안 2026-07-11): 총 90분 단일
+  // 타이머 — 객관식 40문항 ~50분 + 실습형 8문항(유형별 2문항, 5분/문항) ~40분.
+  // 파트 간 자유 이동, written/practical 분할은 권장 배분(집행은 총 시간만).
+  totalMinutes: 90,
+  writtenMinutes: 50,
+  practicalMinutes: 40,
+  passWritten: 60,
+  passPractical: 60,
+  subjectFailPct: 40,
+};
+
+/**
+ * v3.0 base timing (확정안 2026-07-11). L1/L2 were unversioned before v3:
+ *   L2: 120분 = 객관식 50 + 실습 70(과제 A25·B25·C20) — was 90 (30+60).
+ *   L1: 150분 = Part A 40 + Part B 70 + Part C 40 — was 120 (30+90).
+ * L3 flag-off(legacy MCQ-only)는 v3에서도 60분 그대로 (LEVEL_TIMING.L3).
+ */
+const LEVEL_TIMING_V3: Partial<Record<CertLevel, LevelTiming>> = {
+  L2: { totalMinutes: 120, writtenMinutes: 50, practicalMinutes: 70, passWritten: 60, passPractical: 60, subjectFailPct: 40 },
+  L1: { totalMinutes: 150, writtenMinutes: 40, practicalMinutes: 110, passWritten: 60, passPractical: 60, subjectFailPct: 40 },
+};
+
 export function getTiming(
   certType: CertType,
   level: CertLevel,
   specVersion: ExamSpecVersion,
 ): LevelTiming {
   let base = LEVEL_TIMING[level];
-  if (level === 'L3' && isL3PracticalsEnabled()) {
-    base = specVersion === '2.0' ? L3_TIMING_WITH_PRACTICALS_V2 : L3_TIMING_WITH_PRACTICALS;
+  if (specVersion === '3.0') {
+    base = LEVEL_TIMING_V3[level] ?? base;
   }
-  const override = CERT_TIMING_OVERRIDES[certType]?.[level];
+  if (level === 'L3' && isL3PracticalsEnabled()) {
+    base =
+      specVersion === '3.0'
+        ? L3_TIMING_WITH_PRACTICALS_V3
+        : specVersion === '2.0'
+          ? L3_TIMING_WITH_PRACTICALS_V2
+          : L3_TIMING_WITH_PRACTICALS;
+  }
+  // CERT_TIMING_OVERRIDES predates v3 (AXIS_C L2 = 120분). The v3 L2 base is
+  // already 120분, and a blind merge would yield 50+90 ≠ 120 — so the override
+  // applies to ≤2.0 sessions only.
+  const override = specVersion === '3.0' ? undefined : CERT_TIMING_OVERRIDES[certType]?.[level];
   return override ? { ...base, ...override } : base;
 }
 
@@ -200,6 +251,22 @@ export const GATE_KEYS = {
 } as const;
 
 /**
+ * v3.0 gate keys — verbatim from the new_version_v3 세션집계 JSON schemas
+ * (`gate_results.required`). The names encode the v3 cut values (총점 60,
+ * 40% 과락 신설, L1 Part C 하드컷 신설).
+ */
+export const GATE_KEYS_V3 = {
+  TOTAL: 'total_score_min_60',
+  L3_OBJECTIVE: 'objective_score_min_24',
+  L3_PRACTICE: 'practice_score_min_16',
+  L2_OBJECTIVE: 'objective_score_min_12',
+  L2_PRACTICE: 'practice_score_min_42',
+  L1_PART_A: 'part_a_min_10',
+  L1_PART_B: 'part_b_min_33',
+  L1_PART_C: 'part_c_min_8',
+} as const;
+
+/**
  * 시험 표준 v2.0 하드컷 (각 기획서 v2.0, ALL must pass):
  *   L3: 총점 ≥70 + 객관식 ≥30/60 (50% — v2.0 신설) + 실습형 ≥24/40 (60%).
  *   L2: 총점 ≥70 + 객관식 ≥15/30 (50%) + 실습형 ≥42/70 (60%) — v1.1과 동일.
@@ -238,6 +305,41 @@ const LEVEL_SCORING_V2: Record<CertLevel, LevelScoring> = {
   },
 };
 
+/**
+ * 시험 표준 v3.0 하드컷 (new_version_v3 확정안 2026-07-11, ALL must pass):
+ *   L3: 총점 ≥60 + 객관식 ≥24/60 (40%) + 실습형 ≥16/40 (40%).
+ *   L2: 총점 ≥60 + 객관식 ≥12/30 (40%) + 실습형 ≥42/70 (60% — 불변 하드컷).
+ *   L1: 총점 ≥60 + Part A ≥10/25 (40%) + Part B ≥33/55 (60%)
+ *       + Part C ≥8/20 (40% — v3.0 신설 하드컷; v2.0에서는 검수 트리거만 있었음).
+ */
+const LEVEL_SCORING_V3: Record<CertLevel, LevelScoring> = {
+  L3: {
+    passTotal: 60,
+    totalGateKey: GATE_KEYS_V3.TOTAL,
+    sections: [
+      { part: ExamPart.WRITTEN, weight: 60, floorPct: 40, gateKey: GATE_KEYS_V3.L3_OBJECTIVE },
+      { part: ExamPart.PRACTICAL, weight: 40, floorPct: 40, gateKey: GATE_KEYS_V3.L3_PRACTICE },
+    ],
+  },
+  L2: {
+    passTotal: 60,
+    totalGateKey: GATE_KEYS_V3.TOTAL,
+    sections: [
+      { part: ExamPart.WRITTEN, weight: 30, floorPct: 40, gateKey: GATE_KEYS_V3.L2_OBJECTIVE },
+      { part: ExamPart.PRACTICAL, weight: 70, floorPct: 60, gateKey: GATE_KEYS_V3.L2_PRACTICE },
+    ],
+  },
+  L1: {
+    passTotal: 60,
+    totalGateKey: GATE_KEYS_V3.TOTAL,
+    sections: [
+      { part: ExamPart.WRITTEN, weight: 25, floorPct: 40, gateKey: GATE_KEYS_V3.L1_PART_A },
+      { part: ExamPart.DELIVERABLE, weight: 55, floorPct: 60, gateKey: GATE_KEYS_V3.L1_PART_B },
+      { part: ExamPart.ESSAY, weight: 20, floorPct: 40, gateKey: GATE_KEYS_V3.L1_PART_C },
+    ],
+  },
+};
+
 // Scoring is currently uniform across series; the certType param keeps call
 // sites future-proof for a per-series override (mirrors getTiming).
 export function getScoring(
@@ -245,6 +347,11 @@ export function getScoring(
   level: CertLevel,
   specVersion: ExamSpecVersion,
 ): LevelScoring {
+  if (specVersion === '3.0') {
+    // Legacy MCQ-only L3 keeps the v1.1 written-only model on any version.
+    if (level === 'L3' && !isL3PracticalsEnabled()) return LEVEL_SCORING.L3;
+    return LEVEL_SCORING_V3[level];
+  }
   if (specVersion === '2.0') {
     // Legacy MCQ-only L3 (deprecated flag-off mode) has no v2.0 definition —
     // it keeps the v1.1 written-only model even on v2.0 sessions.
@@ -361,9 +468,10 @@ export function getExamSpec(
   specVersion: ExamSpecVersion,
 ): LevelExamSpec {
   const base = LEVEL_EXAM_SPEC[level];
-  // L3 flag flip: 4 실습형(층화 1/유형) on top of the 40 MCQ.
+  // L3 flag flip: 실습형 on top of the 40 MCQ — v3.0 draws 8 (층화 2/유형),
+  // v2.0/v1.1 draw 4 (층화 1/유형).
   const practicalTaskCount =
-    level === 'L3' && isL3PracticalsEnabled() ? 4 : base.practicalTaskCount;
+    level === 'L3' && isL3PracticalsEnabled() ? (specVersion === '3.0' ? 8 : 4) : base.practicalTaskCount;
   return { ...base, practicalTaskCount, timing: getTiming(certType, level, specVersion) };
 }
 

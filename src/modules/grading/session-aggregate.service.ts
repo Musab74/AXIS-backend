@@ -18,6 +18,7 @@ import {
   computeWeightedResult,
   getScoring,
   getTiming,
+  isV2OrLater,
   toSpecVersion,
 } from '../cbtSessions/exam-spec';
 import {
@@ -30,7 +31,10 @@ import {
 } from './grading-config';
 import { sessionReviewV2, TaskScoreV2 } from './review-bands';
 import { parseL3Reference } from './rubric';
-import { SESSION_AGGREGATE_SCHEMAS } from './session-aggregate-schemas';
+import {
+  SESSION_AGGREGATE_SCHEMAS_BY_SPEC,
+  SESSION_AGGREGATE_SCHEMA_VERSIONS,
+} from './session-aggregate-schemas';
 
 type SessionWithAnswers = Prisma.ExamSessionGetPayload<{ include: { essayAnswers: true } }>;
 
@@ -57,16 +61,20 @@ function applicantRef(userId: string): string {
 @Injectable()
 export class SessionAggregateService {
   private readonly logger = new Logger(SessionAggregateService.name);
-  private readonly validators: Record<'L1' | 'L2' | 'L3', ValidateFunction>;
+  private readonly validators: Record<'2.0' | '3.0', Record<'L1' | 'L2' | 'L3', ValidateFunction>>;
 
   constructor(private readonly prisma: PrismaService) {
     const ajv = new Ajv({ allErrors: true, strict: false });
     addFormats(ajv);
-    this.validators = {
-      L1: ajv.compile(SESSION_AGGREGATE_SCHEMAS.L1 as unknown as object),
-      L2: ajv.compile(SESSION_AGGREGATE_SCHEMAS.L2 as unknown as object),
-      L3: ajv.compile(SESSION_AGGREGATE_SCHEMAS.L3 as unknown as object),
+    const compileSet = (spec: '2.0' | '3.0') => {
+      const set = SESSION_AGGREGATE_SCHEMAS_BY_SPEC[spec];
+      return {
+        L1: ajv.compile(set.L1 as unknown as object),
+        L2: ajv.compile(set.L2 as unknown as object),
+        L3: ajv.compile(set.L3 as unknown as object),
+      };
     };
+    this.validators = { '2.0': compileSet('2.0'), '3.0': compileSet('3.0') };
   }
 
   /**
@@ -80,7 +88,7 @@ export class SessionAggregateService {
       include: { essayAnswers: true },
     });
     if (!session) throw new NotFoundException('Session not found');
-    if (toSpecVersion(session.specVersion) !== '2.0') {
+    if (!isV2OrLater(toSpecVersion(session.specVersion))) {
       this.logger.log(
         JSON.stringify({ msg: 'aggregate_skipped_v11', sessionId, specVersion: session.specVersion }),
       );
@@ -93,7 +101,8 @@ export class SessionAggregateService {
       : [];
     const record = this.buildRecord(session, tasks);
     const levelKey = session.level as 'L1' | 'L2' | 'L3';
-    const validate = this.validators[levelKey];
+    const specKey = toSpecVersion(session.specVersion) === '3.0' ? '3.0' : '2.0';
+    const validate = this.validators[specKey][levelKey];
     const schemaValid = validate(record.json) as boolean;
     const schemaErrors = schemaValid
       ? null
@@ -194,7 +203,12 @@ export class SessionAggregateService {
         .reduce((s, a) => s + (a.expertScore ?? a.earnedPoints ?? 0), 0);
     const partB = sumPart(ExamPart.DELIVERABLE);
     const partC = sumPart(ExamPart.ESSAY);
-    const practical = sumPart(ExamPart.PRACTICAL);
+    // L3 v3.0: practice_score = Σ(문항 원점수 10점) × 0.5 환산 (0–40). item_score
+    // stays raw 0–10; the sectionPct/weighted math below is scale-free (pct of
+    // raw max), so only the point-scale scores displayed/validated get ×0.5.
+    const practicalRaw = sumPart(ExamPart.PRACTICAL);
+    const practical =
+      specVersion === '3.0' && level === CertLevel.L3 ? practicalRaw * 0.5 : practicalRaw;
 
     const sectionPct = (part: ExamPart): number => {
       if (part === ExamPart.WRITTEN) return session.writtenScore ?? 0;
@@ -258,20 +272,24 @@ export class SessionAggregateService {
         isRiskJudgementType: practiceType.replace(/[\s·]/g, '').includes('리스크판단'),
       };
     });
-    const review = sessionReviewV2(level, {
-      total: weighted.total,
-      objective,
-      practice: level === CertLevel.L1 ? partB : practical,
-      partC: level === CertLevel.L1 ? partC : undefined,
-      taskScores,
-      gateTriggered,
-      riskFlagged: riskFlags.length > 0,
-      criticalRisk: highestSeverity === 'critical',
-      criticalFail: criticalFailPatterns.length > 0,
-      lowConfidence: minConfidence < GRADING_CONFIG.CONFIDENCE_FLOOR,
-      injectionSuspected,
-      unscoredTask,
-    });
+    const review = sessionReviewV2(
+      level,
+      {
+        total: weighted.total,
+        objective,
+        practice: level === CertLevel.L1 ? partB : practical,
+        partC: level === CertLevel.L1 ? partC : undefined,
+        taskScores,
+        gateTriggered,
+        riskFlagged: riskFlags.length > 0,
+        criticalRisk: highestSeverity === 'critical',
+        criticalFail: criticalFailPatterns.length > 0,
+        lowConfidence: minConfidence < GRADING_CONFIG.CONFIDENCE_FLOOR,
+        injectionSuspected,
+        unscoredTask,
+      },
+      specVersion === '3.0' ? '3.0' : '2.0',
+    );
     const below40 = new Set(review.tasksBelow40Pct);
 
     const decisionStatus = (session.decisionStatus ?? DecisionStatus.PROVISIONAL).toLowerCase();
@@ -282,9 +300,12 @@ export class SessionAggregateService {
     const rubricVersion = answers.map((a) => a.aiRubricVersion).find((v) => v) ?? 'v1';
 
     const base = {
-      // L1 session-aggregate schema is v1.1 (adds the Part C 검수 기준 review
-      // reason); L2/L3 remain v1.0. Must match the level schema's const.
-      schema_version: level === 'L1' ? '1.1' : '1.0',
+      // schema_version must match the (specVersion, level) schema's const —
+      // v2.0: {L1 1.1, L2 1.0, L3 1.0}; v3.0: {L1 1.2, L2 1.1, L3 1.0}.
+      schema_version:
+        SESSION_AGGREGATE_SCHEMA_VERSIONS[specVersion === '3.0' ? '3.0' : '2.0'][
+          level as 'L1' | 'L2' | 'L3'
+        ],
       qualification: 'AXIS',
       level,
       applicant_ref: applicantRef(session.userId),

@@ -10,40 +10,12 @@
  */
 
 import { PrismaClient, CertType, CertLevel } from '@prisma/client';
+// EXPECTED COUNTS — single source of truth, shared with the v3 conformance smoke
+// test (src/smoke-test-v3-conformance.ts) so the DB check (what the database
+// holds) and the shipped-bank check (what the YAML contains) cannot drift apart.
+import { EXPECTED_MC, EXPECTED_PRACTICAL } from '../src/modules/cbtSessions/bank-expectations';
 
 const prisma = new PrismaClient();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EXPECTED COUNTS
-// ─────────────────────────────────────────────────────────────────────────────
-
-// AXIS L2/L3 (and L1 MCQ) reflect the v2.0 authored bank imported from
-// new_doc_l3/ (import-new-questions.ts) — still growing, so bump these as
-// batches land. Other combos are still the legacy CSV bank sizes.
-const EXPECTED_MC: Record<string, number> = {
-  'AXIS_L3': 409, // 공식은행 400 (승인, 구버전 통합본 HTML→YAML 변환) + 샘플 v5.1 잔여 9 (초안, 비드로어블)
-  'AXIS_L2': 320, // 정식 10회분(300) + 파일럿 P001(10) + 샘플 v2.1(10) — 은행확장 마스터플랜 v1.1
-  'AXIS_L1': 250,
-  'AXIS_C_L3': 200,
-  'AXIS_C_L2': 120,
-  'AXIS_C_L1': 100,
-  'AXIS_H_L3': 200,
-  'AXIS_H_L2': 120,
-  'AXIS_H_L1': 100,
-};
-
-// L1 has 3 task slots per set (part_a + part_b + essay_2) × 4 sets = 12 templates.
-// See exam-spec.ts LEVEL_EXAM_SPEC.L1: practicalTaskCount = 3 (1 deliverable + 2 essays).
-// AXIS L2 = v2.0 세트형 bank: 20 scenario sets × Task A/B/C.
-const EXPECTED_PRACTICAL: Record<string, number> = {
-  'AXIS_L3': 40, // 실습은행 정합판 v1.1 (4 유형 × 8 + 세트B 4 + 최초샘플 4)
-  'AXIS_L2': 60,
-  'AXIS_L1': 60,
-  'AXIS_C_L2': 12,
-  'AXIS_C_L1': 12,
-  'AXIS_H_L2': 12,
-  'AXIS_H_L1': 12,
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VALIDATION FUNCTIONS
@@ -280,11 +252,16 @@ async function main() {
   }
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+// Entry-point guard: EXPECTED_MC/EXPECTED_PRACTICAL are imported by the v3
+// conformance smoke test (which must not open a DB connection), so only run the
+// validation when this file is executed directly.
+if (require.main === module) {
+  main()
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}

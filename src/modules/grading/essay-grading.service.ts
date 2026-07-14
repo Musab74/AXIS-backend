@@ -7,12 +7,17 @@ import {
   EssayGradeRiskFlag,
   EssayGradeTask,
 } from '../../integrations/anthropic/claude-essay-grader.service';
-import { getScoring, getSectionFloorPct, toSpecVersion } from '../cbtSessions/exam-spec';
+import { getScoring, getSectionFloorPct, isV2OrLater, toSpecVersion } from '../cbtSessions/exam-spec';
 import { parseRubric, parseL3Reference, RubricCriterion } from './rubric';
 import { AI_GRADING_PROMPT_VERSION, GRADING_CONFIG } from './grading-config';
 import { CodeGradingService } from './code-grading.service';
 import { scanForbiddenPatterns } from './forbidden-patterns';
-import { L3PracticalGraderService, parseL3Submission } from './l3-practical-grader.service';
+import {
+  L3PracticalGraderService,
+  l3PracticalFloorPct,
+  parseL3Submission,
+} from './l3-practical-grader.service';
+import { renderStructuredAnswer } from './structured-answer';
 import type { L3GradeResult, L3Submission } from './l3-practical-grader.types';
 import { BaselineGateService, BaselineGateStatus } from './baseline-gate.service';
 import { sessionReviewV2, TaskScoreV2 } from './review-bands';
@@ -154,7 +159,7 @@ export class EssayGradingService {
       session.decisionStatus === DecisionStatus.CONFIRMED_FAIL ||
       session.decisionStatus === DecisionStatus.INVALIDATED;
     const decisionStatus =
-      toSpecVersion(session.specVersion) === '2.0' && !locked
+      isV2OrLater(toSpecVersion(session.specVersion)) && !locked
         ? mandatoryReview
           ? DecisionStatus.IN_REVIEW
           : DecisionStatus.PROVISIONAL
@@ -200,11 +205,11 @@ export class EssayGradingService {
     const pctByTask = new Map(outcomes.map((o) => [o.taskId, o.pct ?? 0]));
     const specVersion = toSpecVersion(session.specVersion);
     const scoring = getScoring(session.certType, session.level, specVersion);
-    if (specVersion !== '2.0') {
+    if (!isV2OrLater(specVersion)) {
       return sessionReviewFromTaskPcts(scoring, session.writtenScore ?? 0, tasks, pctByTask);
     }
 
-    // v2.0: rebuild the point-scale scores the aggregate schemas use. The
+    // v2.0+: rebuild the point-scale scores the aggregate schemas use. The
     // written section's weight is its point max (60/30/25); practical points
     // sum the raw task maxes with the AI pct applied.
     const writtenWeight = scoring.sections.find((s) => s.part === ExamPart.WRITTEN)?.weight ?? 0;
@@ -227,18 +232,27 @@ export class EssayGradingService {
         0,
       );
     const isL1 = session.level === 'L1';
-    const practice = isL1 ? partOf(ExamPart.DELIVERABLE) : partOf(ExamPart.PRACTICAL);
+    // L3 v3.0: 8 items × 10점 원점수 = 0–80 → practice_score is the ×0.5 환산
+    // (0–40). The band cuts (13~19 / 과락 16) and the 100-pt total are on the
+    // converted scale.
+    const practiceRaw = isL1 ? partOf(ExamPart.DELIVERABLE) : partOf(ExamPart.PRACTICAL);
+    const practice =
+      specVersion === '3.0' && session.level === 'L3' ? practiceRaw * 0.5 : practiceRaw;
     const partC = isL1 ? partOf(ExamPart.ESSAY) : undefined;
     const total = Math.round(
       objective + practice + (partC ?? 0),
     );
-    const review = sessionReviewV2(session.level, {
-      total,
-      objective,
-      practice,
-      partC,
-      taskScores,
-    });
+    const review = sessionReviewV2(
+      session.level,
+      {
+        total,
+        objective,
+        practice,
+        partC,
+        taskScores,
+      },
+      specVersion === '3.0' ? '3.0' : '2.0',
+    );
     return review.humanReviewRequired;
   }
 
@@ -307,7 +321,12 @@ export class EssayGradingService {
   ): Promise<GradedOutcome> {
     const criteria = parseRubric(tpl.rubric, tpl.points);
     const maxTotal = criteria.reduce((s, c) => s + c.maxPoints, 0) || tpl.points;
-    const base = this.l3Grader.gradeL3Practical({ points: tpl.points, rubric: tpl.rubric }, submission);
+    // v3.0 lowers the L3 per-item review floor 60% → 40% (확정안 실습 16/40).
+    const base = this.l3Grader.gradeL3Practical(
+      { points: tpl.points, rubric: tpl.rubric },
+      submission,
+      l3PracticalFloorPct(toSpecVersion(session.specVersion)),
+    );
 
     let final = base;
     let aiModel = 'l3-answer-key';
@@ -377,7 +396,9 @@ export class EssayGradingService {
     };
     return this.grader.grade(
       focused,
-      { contentText: ans.contentText, aiChatLog: ans.aiChatLog },
+      // Render the L3 envelope so the model reads the candidate's selections as
+      // option TEXT (not bare codes) alongside their 근거.
+      { contentText: renderStructuredAnswer(tpl.rubric, ans.contentText), aiChatLog: ans.aiChatLog },
       tpl.part,
       tpl.certType,
       CertLevel.L3,
@@ -412,7 +433,10 @@ export class EssayGradingService {
     const raw = await this.grader.grade(
       gradedTask,
       {
-        contentText: ans.contentText,
+        // Structured answers are stored as a JSON envelope; render them to
+        // readable Korean (labels + resolved option text) before they reach the
+        // model. Raw JSON would feed it opaque codes and deflate every score.
+        contentText: renderStructuredAnswer(tpl.rubric, ans.contentText),
         aiChatLog: includeChatLog ? ans.aiChatLog : undefined,
         executionSummary,
       },

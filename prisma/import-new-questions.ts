@@ -33,11 +33,15 @@ import { PrismaClient, CertType, CertLevel, ExamPart, QuestionType } from '@pris
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'crypto';
+// Single source of truth for the L3 rubric wrapper (incl. the grading splits) —
+// shared with the exam E2E test so stored and tested rubrics cannot drift.
+import { buildL3RubricWrapper } from '../src/modules/grading/l3-rubric-split';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const yaml: { load: (s: string) => unknown } = require('js-yaml');
 
 const prisma = new PrismaClient();
-const ROOT = join(__dirname, '..', '..', 'new_doc_l3');
+// v3.0 bank package (new_version_v3 확정안 2026-07-11). Superseded new_doc_l3.
+const ROOT = join(__dirname, '..', '..', 'new_version_v3');
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -51,13 +55,32 @@ const ONLY_SERIES = val('--series') as CertType | undefined;
 const ONLY_LEVEL = val('--level') as CertLevel | undefined;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+/**
+ * Directories that must never be ingested:
+ *   구버전/비편입 — superseded or reserve items (legacy new_doc_l3 rule).
+ *   0_기획서 · 1_가이드 · 검토용_HTML — human-facing docs (contain answer keys).
+ *   2_AI 채점 — 채점 프롬프트 + 베이스라인 예시답안 (parseable YAML that is NOT
+ *     bank content; a nested scenario_set_id there must never reach the bank).
+ *   시험·채점_설정 — exam config YAML (시험설정_명세, 합격선, CBT UI 요구사항).
+ */
+function isSkippedDir(name: string): boolean {
+  if (name === '구버전' || name === '0_구버전') return true;
+  if (name.includes('비편입')) return true;
+  if (name.includes('기획서')) return true;
+  if (name.includes('가이드')) return true;
+  if (name.includes('검토용_HTML')) return true;
+  if (name.includes('AI 채점') || name.includes('AI채점')) return true;
+  if (name.includes('시험·채점_설정')) return true;
+  return false;
+}
+
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
-    if (name === '구버전' || name === '0_구버전') continue;
-    if (name.includes('비편입')) continue; // 예비/비편입 reserve items — not part of the live bank
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (p.endsWith('.yaml') || p.endsWith('.yml')) out.push(p);
+    if (statSync(p).isDirectory()) {
+      if (isSkippedDir(name)) continue;
+      walk(p, out);
+    } else if (p.endsWith('.yaml') || p.endsWith('.yml')) out.push(p);
   }
   return out;
 }
@@ -89,8 +112,9 @@ interface Parsed {
   mcq: any[]; // question_bank rows (partial)
   practical: any[]; // task_templates PRACTICAL
   essay: any[]; // task_templates ESSAY
+  deliverable: any[]; // task_templates DELIVERABLE (L1 Part B 실행계획서)
 }
-const parsed: Parsed = { mcq: [], practical: [], essay: [] };
+const parsed: Parsed = { mcq: [], practical: [], essay: [], deliverable: [] };
 const seenIds = new Set<string>();
 
 // subjectIndex per (level) assigned deterministically by evaluation_area order.
@@ -133,6 +157,14 @@ function ingestFile(path: string) {
     return;
   }
 
+  // L1 Part B 실행계획서 (single-document deliverable): scenario_id + rubric[] +
+  // required_outputs, no items[]/tasks[]. v3 신설 branch — these 20 scenarios were
+  // silently dropped before (the file matched no shape).
+  if (doc?.scenario_id && Array.isArray(doc?.rubric) && doc?.task_prompt) {
+    ingestExecutionPlan(doc, series, level);
+    return;
+  }
+
   const items = doc?.items ?? doc?.questions ?? (Array.isArray(doc) ? doc : null);
   if (!Array.isArray(items)) return;
 
@@ -145,24 +177,17 @@ function ingestFile(path: string) {
 
     if (it.practice_type) {
       // ── L3 실습형 practical ──
+      // The rubric wrapper (incl. the fieldPoints/riskControl/generatedCriteria
+      // splits the grader needs) is built by the SHARED helper, so the stored
+      // rubric and the tested rubric can never drift apart.
       const type = normType(it.practice_type);
-      const ak = rec(it.answer_key) ?? {};
-      const required = rec(ak.required_choices) ?? {};
       parsed.practical.push({
         certType: series, level, part: ExamPart.PRACTICAL,
         title: `[${type}] ${String(it.task ?? id ?? '').slice(0, 50)}`,
         scenario: [flatten(it.scenario), it.task ? `[과제] ${it.task}` : ''].filter(Boolean).join('\n\n'),
         points: Number(it.score) || 10, durationMin: Number(it.time_minutes) || 5,
         taskType: type, difficulty: it.difficulty ?? null, sourceId: id,
-        rubric: {
-          itemId: id, practiceType: type, evaluationArea: it.evaluation_area ?? null,
-          difficulty: it.difficulty ?? null, responseFormat: it.response_format ?? null,
-          answerKey: { ...required, ...(typeof ak.key_reason === 'string' ? { key_reason: ak.key_reason } : {}) },
-          mustNotChoose: Array.isArray(ak.must_not_choose) ? ak.must_not_choose : [],
-          partialCreditRule: ak.partial_credit_rule ?? null,
-          rubric: it.rubric_10_points ?? it.rubric ?? null,
-          riskFlags: it.risk_flags ?? null, rubric_version: '2.0',
-        },
+        rubric: buildL3RubricWrapper(it, id, type),
       });
     } else if (it.question && rec(it.question)?.options) {
       // ── MCQ (객관식) ──
@@ -191,7 +216,8 @@ function ingestFile(path: string) {
         certType: series, level, part: ExamPart.ESSAY,
         title: `[${it.item_type ?? 'Part C'}] ${String(id ?? '').slice(-8)}`,
         scenario: [it.scenario, it.question ? `[과제] ${it.question}` : ''].filter(Boolean).join('\n\n'),
-        points: Number(it.score) || 10, durationMin: 15,
+        // v3 L1: Part C 40분 / 2문항 = 20분/문항.
+        points: Number(it.score) || 10, durationMin: 20,
         taskType: it.item_type ?? null, difficulty: it.difficulty ?? null, sourceId: id,
         rubric: {
           itemId: id,
@@ -224,6 +250,78 @@ function flattenMaterial(value: unknown): string {
       .join('\n');
   }
   return String(value ?? '').trim();
+}
+
+/**
+ * L1 Part B 실행계획서 (DELIVERABLE) — one TaskTemplate per scenario document.
+ * Mirrors seed-v2-samples.ts seedL1PartB, the shape claude-essay-grader was
+ * tuned for: `criteria` MUST be formatted strings (rubric.ts extracts the
+ * `(n점)` weight; raw objects would stringify to "[object Object]"), and the
+ * raw array goes under `rubricDetail` — never an inner key named `rubric`,
+ * which parseL3Reference would misread as the L3 wrapper.
+ */
+function ingestExecutionPlan(doc: any, series: CertType, level: CertLevel) {
+  const scenarioId = String(doc.scenario_id);
+  if (seenIds.has(scenarioId)) return;
+  seenIds.add(scenarioId);
+
+  const rubricArr: any[] = Array.isArray(doc.rubric) ? doc.rubric : [];
+  const requiredOutputs: string[] = Array.isArray(doc.required_outputs)
+    ? doc.required_outputs.map((x: unknown) => String(x))
+    : [];
+  const anchors = rec(doc.anchor_response_set) ?? {};
+  const bandText = (b: unknown): string | null => {
+    const r = rec(b);
+    if (!r) return typeof b === 'string' ? b : null;
+    return [r.score_range, r.summary ?? r.description].filter(Boolean).join(' — ') || null;
+  };
+
+  parsed.deliverable.push({
+    certType: series,
+    level,
+    part: ExamPart.DELIVERABLE,
+    title: `[실행계획서] ${doc.title ?? scenarioId}`,
+    scenario: [
+      doc.title ? `【${doc.title}】` : '',
+      typeof doc.context === 'string' ? doc.context.trim() : '',
+      doc.organization_profile ? `[조직 프로필]\n${flattenMaterial(doc.organization_profile)}` : '',
+      doc.diagnostic_data ? `[진단 데이터]\n${flattenMaterial(doc.diagnostic_data)}` : '',
+      doc.candidate_projects ? `[AI 적용 후보 과제]\n${flattenMaterial(doc.candidate_projects)}` : '',
+      doc.policy_draft ? `[현행 정책 초안]\n${flattenMaterial(doc.policy_draft)}` : '',
+      '[응시 환경] L1은 AI 사용이 전면 금지된다. 외부 검색·외부 도구·개인 자료 반입 불가.',
+      doc.task_prompt ? `[과제] ${String(doc.task_prompt).trim()}` : '',
+      requiredOutputs.length ? `[필수 목차]\n${requiredOutputs.map((o, i) => `${i + 1}. ${o}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n'),
+    points: rubricArr.reduce((s, r) => s + (Number(r?.points) || 0), 0) || 55,
+    durationMin: 70, // v3 L1: Part A 40 + Part B 70 + Part C 40 = 150분
+    taskType: '실행계획서',
+    difficulty: rec(doc.mapping_reference)?.difficulty ?? null,
+    sourceId: scenarioId,
+    aiToolAllowed: 'AI 사용 불가',
+    requiredStructure: requiredOutputs.join('\n'),
+    riskCriteria: [
+      Array.isArray(doc.risk_tags) ? doc.risk_tags.join(' · ') : '',
+      String(rec(anchors.high_risk)?.trigger ?? ''),
+    ].filter(Boolean).join('\n') || null,
+    benchmarkExcellent: bandText(anchors.excellent),
+    benchmarkNormal: bandText(anchors.normal),
+    benchmarkBorderline: bandText(anchors.borderline),
+    benchmarkFail: bandText(anchors.fail),
+    lifecycleStatus: LIFECYCLE,
+    rubric: {
+      itemId: scenarioId,
+      criteria: rubricArr.map(
+        (r: any) => `${r.criteria}(${r.points}점): ${r.description ?? ''}`.trim(),
+      ),
+      rubricDetail: rubricArr,
+      requiredOutputs,
+      excellentAnswerOutline: doc.excellent_answer_outline ?? [],
+      minimumPassPoints: doc.minimum_pass_points ?? [],
+      criticalFailPatterns: doc.critical_fail_patterns ?? [],
+      gateNote: doc.gate_note ?? null,
+      rubric_version: '3.0',
+    },
+  });
 }
 
 // L2 실습형 세트 → one practical row per task, same rubric/column shape as
@@ -304,6 +402,7 @@ async function main() {
   if (draftMcq) console.log(`              └ ${draftMcq} from 작성도구 samples → 초안 (non-drawable reference)`);
   console.log('  Practical :', parsed.practical.length, JSON.stringify(by(parsed.practical, (x) => `${x.certType}/${x.level}`)));
   console.log('  Essay     :', parsed.essay.length, JSON.stringify(by(parsed.essay, (x) => `${x.certType}/${x.level}`)));
+  console.log('  Deliverable:', parsed.deliverable.length, JSON.stringify(by(parsed.deliverable, (x) => `${x.certType}/${x.level}`)));
 
   if (DRY) {
     console.log('\n(DRY RUN — nothing written. Re-run with --write to upsert, or --replace to delete+insert.)');
@@ -315,7 +414,11 @@ async function main() {
     if (ONLY_SERIES) scope.certType = ONLY_SERIES;
     if (ONLY_LEVEL) scope.level = ONLY_LEVEL;
     // delete only the (series×level) combos the files actually cover, unless scoped.
-    const combos = new Set([...parsed.mcq, ...parsed.practical, ...parsed.essay].map((x) => `${x.certType}|${x.level}`));
+    const combos = new Set(
+      [...parsed.mcq, ...parsed.practical, ...parsed.essay, ...parsed.deliverable].map(
+        (x) => `${x.certType}|${x.level}`,
+      ),
+    );
     for (const c of combos) {
       const [certType, level] = c.split('|');
       if (ONLY_SERIES && certType !== ONLY_SERIES) continue;
@@ -341,7 +444,7 @@ async function main() {
   const setNo: Record<string, number> = {};
   const setNoByScenarioSet: Record<string, number> = {};
   let tAdd = 0;
-  for (const t of [...parsed.practical, ...parsed.essay]) {
+  for (const t of [...parsed.practical, ...parsed.essay, ...parsed.deliverable]) {
     const { sourceId, setKey, orderInSet, ...row } = t;
     let no: number, order: number;
     if (setKey) {

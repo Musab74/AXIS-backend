@@ -27,11 +27,24 @@ export function toStringArray(v: unknown): string[] {
   return [];
 }
 
+/**
+ * An option code from the v3 bank: letter prefix + number (E1, M12, T4…).
+ * These are IDENTIFIERS, not prose — they must match exactly. The substring and
+ * trigram rules below are meant for Korean phrases and would happily equate
+ * "E1" with "E10" (and "E1" with any answer text containing it), which would
+ * silently mis-grade the moment a bank grows past 9 options in a field.
+ */
+const OPTION_CODE_RE = /^[A-Za-z]{1,3}\d{1,3}$/;
+
 /** Whitespace/case/punctuation-insensitive equality with a trigram-similarity fallback. */
 export function fuzzyEqual(a: string, b: string): boolean {
   const na = normalize(a);
   const nb = normalize(b);
   if (!na || !nb) return false;
+  // Option codes are compared exactly (case-insensitively) — never fuzzily.
+  if (OPTION_CODE_RE.test(a.trim()) || OPTION_CODE_RE.test(b.trim())) {
+    return a.trim().toUpperCase() === b.trim().toUpperCase();
+  }
   if (na === nb || na.includes(nb) || nb.includes(na)) return true;
   return trigramCosine(a, b) >= FUZZY_THRESHOLD;
 }

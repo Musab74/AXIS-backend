@@ -21,11 +21,33 @@ import { L3GradeDetail, L3GradeResult, L3GradeTask, L3RubricPayload, L3Submissio
 
 export * from './l3-practical-grader.types';
 
-/** L3 실습형 practical floor: 24/40 == 60% (운영기획서 §6/§10). */
-const PRACTICAL_FLOOR_PCT = 60;
+/**
+ * L3 실습형 per-item review floor (%). v2.0: 60% (24/40, 운영기획서 §6/§10).
+ * v3.0 확정안: 40% (16/40). This is the per-item EXPERT-REVIEW trigger only —
+ * the session pass gate lives in computeWeightedResult.
+ */
+export const PRACTICAL_FLOOR_PCT_V2 = 60;
+export const PRACTICAL_FLOOR_PCT_V3 = 40;
+
+/** Per-item review floor for the session's spec version. */
+export function l3PracticalFloorPct(specVersion: string): number {
+  return specVersion === '3.0' ? PRACTICAL_FLOOR_PCT_V3 : PRACTICAL_FLOOR_PCT_V2;
+}
 
 /** answerKey fields that are reference prose, not objective selections to score. */
 const NON_OBJECTIVE_KEYS = new Set(['key_reason', 'example_prompt']);
+
+/**
+ * Does the candidate's 요청문 ask the AI to self-check its own output?
+ * (검증요청 criterion — "…점검 요청을 요청문에 포함")
+ *
+ * Widened to the phrasings the v3 bank's own model answers actually use: they
+ * say "…짚어 보고하라" / "…검산해 보고하라" far more often than "검증/점검".
+ * With the narrow (검증|점검|확인|검토|표시) form, only 3 of the 8 지시설계형
+ * model prompts matched — i.e. 2 of 10 points were unearnable even for a
+ * perfect answer.
+ */
+const VERIFICATION_REQUEST_RE = /(검증|점검|확인|검토|표시|짚어|검산|대조|재확인)/;
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -192,7 +214,11 @@ interface RationaleOutcome {
  */
 @Injectable()
 export class L3PracticalGraderService {
-  gradeL3Practical(task: L3GradeTask, submission: L3Submission): L3GradeResult {
+  gradeL3Practical(
+    task: L3GradeTask,
+    submission: L3Submission,
+    floorPct: number = PRACTICAL_FLOOR_PCT_V2,
+  ): L3GradeResult {
     const payload = parseL3RubricPayload(task.rubric);
     const answerKey = payload.answerKey ?? {};
     const maxTotal = payload.criteria.reduce((s, c) => s + c.maxPoints, 0) || task.points;
@@ -237,6 +263,7 @@ export class L3PracticalGraderService {
       earnedPoints,
       taskPoints: task.points,
       mustNotChooseHits,
+      floorPct,
     });
 
     return {
@@ -311,7 +338,7 @@ export class L3PracticalGraderService {
       if (text) {
         ratio =
           g.kind === 'verification_request'
-            ? /(검증|점검|확인|검토|표시)/.test(text)
+            ? VERIFICATION_REQUEST_RE.test(text)
               ? 1
               : 0
             : keywordCoverage(text, extractKeywords(example));
@@ -329,8 +356,15 @@ export class L3PracticalGraderService {
   }
 
   /** Points on the "근거"/rationale criterion (typically 1); 0 if the rubric has none. */
+  /**
+   * Points on the 근거(rationale) criterion. Match the criterion NAME only —
+   * parseRubric folds the description into the label ("조건 추출·누락요소
+   * 식별(3점): 원자료에 근거 있는 요소…"), and a description that merely mentions
+   * 근거 would otherwise steal the rationale weight from the real 근거 criterion.
+   */
   private rationalePoints(criteria: RubricCriterion[]): number {
-    const c = criteria.find((x) => /근거|rationale|reason|이유|서술/i.test(x.label));
+    const nameOf = (label: string) => label.split(/[(:：]/)[0];
+    const c = criteria.find((x) => /근거|rationale|reason|이유|서술/i.test(nameOf(x.label)));
     return c?.maxPoints ?? 0;
   }
 
@@ -397,12 +431,13 @@ export class L3PracticalGraderService {
     earnedPoints: number;
     taskPoints: number;
     mustNotChooseHits: number;
+    floorPct: number;
   }): { flags: EssayGradeRiskFlag[]; gate: EssayGradeGate; needsExpertReview: boolean } {
     const flags: EssayGradeRiskFlag[] = [];
-    // Below the 24/40 floor, or within the pass-boundary band around it.
+    // Below the per-item floor (v2 60% / v3 40%), or within the pass-boundary band around it.
     let review =
-      ctx.pct < PRACTICAL_FLOOR_PCT ||
-      Math.abs(ctx.pct - PRACTICAL_FLOOR_PCT) <= GRADING_CONFIG.BOUNDARY_BAND_PCT;
+      ctx.pct < ctx.floorPct ||
+      Math.abs(ctx.pct - ctx.floorPct) <= GRADING_CONFIG.BOUNDARY_BAND_PCT;
 
     if (isRiskTypeItem(ctx.payload) && ctx.earnedPoints <= ctx.taskPoints / 2) {
       review = true;

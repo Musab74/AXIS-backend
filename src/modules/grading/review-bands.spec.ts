@@ -7,6 +7,7 @@ import {
   computeWeightedResult,
   getScoring,
   getTiming,
+  EXAM_SPEC_VERSIONS,
   GATE_KEYS,
   toSpecVersion,
   currentSpecVersion,
@@ -131,9 +132,12 @@ describe('exam-spec v2.0 hard cuts (WP2)', () => {
     it('spec-version helpers normalize unknown values to 1.1', () => {
       expect(toSpecVersion('2.0')).toBe('2.0');
       expect(toSpecVersion('1.1')).toBe('1.1');
+      expect(toSpecVersion('3.0')).toBe('3.0'); // v3.0 must NOT degrade to 1.1
       expect(toSpecVersion(null)).toBe('1.1');
       expect(toSpecVersion('9.9')).toBe('1.1');
-      expect(['1.1', '2.0']).toContain(currentSpecVersion());
+      // currentSpecVersion() follows EXAM_SPEC_VERSION (default '2.0'; local envs
+      // may opt into '3.0'), so accept any known version here.
+      expect(EXAM_SPEC_VERSIONS as readonly string[]).toContain(currentSpecVersion());
     });
   });
 });

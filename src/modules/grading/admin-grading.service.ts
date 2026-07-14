@@ -22,7 +22,9 @@ import {
   getTiming,
   getScoring,
   computeWeightedResult,
+  isV2OrLater,
   toSpecVersion,
+  V2_OR_LATER_VERSIONS,
 } from '../cbtSessions/exam-spec';
 import { CertificatesService, IssuedCertificate } from '../certificates/certificates.service';
 import { CbtSessionsService } from '../cbtSessions/cbt-sessions.service';
@@ -31,6 +33,7 @@ import { ExpertScoreDto } from './dto/expert-score.dto';
 import { GRADING_CONFIG } from './grading-config';
 import { parseExpertCertScopes } from './expert-scopes';
 import { parseL3Reference } from './rubric';
+import { renderStructuredAnswer } from './structured-answer';
 import { anyAnswerEscalated, isScoreDisputed } from './review-triggers';
 import { SessionAggregateService } from './session-aggregate.service';
 import {
@@ -509,7 +512,12 @@ export class AdminGradingService {
           // Item-author review conditions from the L3 seed (rubric JSON) —
           // shown to the reviewer alongside the generic runtime triggers.
           expertReviewTrigger: parseL3Reference(t?.rubric ?? null)?.expertReviewTrigger ?? null,
-          contentText: a.contentText,
+          // Structured answers are stored as a JSON envelope — render them so the
+          // reviewer reads the candidate's actual words and the option TEXT they
+          // chose, not raw codes. Plain-text answers pass through unchanged.
+          contentText: renderStructuredAnswer(t?.rubric ?? null, a.contentText),
+          /** The untouched envelope, for the reviewer UI to render field-by-field. */
+          contentRaw: a.contentText,
           hasAttachment,
           attachmentFileName: attachmentFileNameFromKey(a.attachmentUrl),
           deliverableReview: parsedNotes.review,
@@ -1021,9 +1029,9 @@ export class AdminGradingService {
           passed,
           failReason,
           submittedAt: session.submittedAt ?? new Date(),
-          // v2.0 (WP4): expert finalize IS the human lock — persist the
+          // v2.0+ (WP4): expert finalize IS the human lock — persist the
           // confirmed decision state alongside the legacy fields.
-          ...(specVersion === '2.0'
+          ...(isV2OrLater(specVersion)
             ? {
                 decisionStatus: passed
                   ? DecisionStatus.CONFIRMED_PASS
@@ -1152,9 +1160,9 @@ export class AdminGradingService {
     });
     if (!session) throw new NotFoundException('Session not found');
     const specVersion = toSpecVersion(session.specVersion);
-    if (specVersion !== '2.0') {
+    if (!isV2OrLater(specVersion)) {
       throw new BadRequestException(
-        'Decision confirmation applies to v2.0 sessions only — v1.1 sessions use the legacy finalize flow.',
+        'Decision confirmation applies to v2.0+ sessions only — v1.1 sessions use the legacy finalize flow.',
       );
     }
     if (
@@ -1283,7 +1291,7 @@ export class AdminGradingService {
         ...(filter.sessionIds?.length ? { id: { in: filter.sessionIds } } : {}),
         ...(filter.certType ? { certType: filter.certType } : {}),
         ...(filter.level ? { level: filter.level } : {}),
-        specVersion: '2.0',
+        specVersion: { in: [...V2_OR_LATER_VERSIONS] },
         status: ExamSessionStatus.SUBMITTED,
         decisionStatus: DecisionStatus.PROVISIONAL,
         mandatoryReview: false,
@@ -1399,8 +1407,8 @@ export class AdminGradingService {
     if (!reason?.trim()) throw new BadRequestException('An invalidation reason is required.');
     const session = await this.prisma.examSession.findUnique({ where: { id: sessionId } });
     if (!session) throw new NotFoundException('Session not found');
-    if (toSpecVersion(session.specVersion) !== '2.0') {
-      throw new BadRequestException('Invalidation applies to v2.0 sessions only.');
+    if (!isV2OrLater(toSpecVersion(session.specVersion))) {
+      throw new BadRequestException('Invalidation applies to v2.0+ sessions only.');
     }
     if (session.decisionStatus === DecisionStatus.INVALIDATED) {
       return { sessionId, decisionStatus: session.decisionStatus };

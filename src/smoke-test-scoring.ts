@@ -483,6 +483,73 @@ section('v2.0 review bands (sessionReviewV2)');
   check('L1 clean → no review', !l1Clean.humanReviewRequired);
 }
 
+// ── 12. 시험 표준 v3.0 (new_version_v3 확정안 2026-07-11) ────────────────────
+section('v3.0 timing · hard cuts · 8문항 실습 · 경계밴드');
+{
+  process.env.L3_PRACTICALS_ENABLED = 'true';
+
+  // 검정시간: L3 90분(50+40) · L2 120분 · L1 150분.
+  const t3 = getTiming(CertType.AXIS, CertLevel.L3, '3.0');
+  check('v3.0 L3 90분 (객관식 50 + 실습 40)',
+    t3.totalMinutes === 90 && t3.writtenMinutes === 50 && t3.practicalMinutes === 40,
+    `${t3.totalMinutes}/${t3.writtenMinutes}/${t3.practicalMinutes}`);
+  check('v3.0 L2 120분 · L1 150분',
+    getTiming(CertType.AXIS, CertLevel.L2, '3.0').totalMinutes === 120 &&
+      getTiming(CertType.AXIS, CertLevel.L1, '3.0').totalMinutes === 150);
+  // AXIS_C L2 override (≤2.0 전용) must not corrupt the v3 base → 50+90 ≠ 120.
+  check('v3.0 AXIS_C L2 stays 120분 (override not merged)',
+    getTiming(CertType.AXIS_C, CertLevel.L2, '3.0').totalMinutes === 120);
+
+  // 실습형 8문항 (유형별 2문항).
+  check('v3.0 L3 실습형 8문항 (v2.0은 4문항)',
+    getExamSpec(CertType.AXIS, CertLevel.L3, '3.0').practicalTaskCount === 8 &&
+      getExamSpec(CertType.AXIS, CertLevel.L3, '2.0').practicalTaskCount === 4);
+
+  // 하드컷: 총점 60 + 40% 과락 (L2 실습 60% · L1 Part B 60% 유지).
+  const s3 = getScoring(CertType.AXIS, CertLevel.L3, '3.0');
+  check('v3.0 L3 총점 60 + gate keys (24/16)',
+    s3.passTotal === 60 &&
+      s3.totalGateKey === 'total_score_min_60' &&
+      s3.sections[0].gateKey === 'objective_score_min_24' &&
+      s3.sections[1].gateKey === 'practice_score_min_16');
+  // 실습 15/40 = 37.5% → 과락 (객관식 만점이어도 비보상).
+  const l3v3Fail = computeWeightedResult(s3, (p) => (p === ExamPart.PRACTICAL ? 37.5 : 100));
+  check('v3.0 L3 실습 15/40 → practice_score_min_16=false (비보상)',
+    !l3v3Fail.passed && l3v3Fail.gateResults['practice_score_min_16'] === false);
+
+  const s2v3 = getScoring(CertType.AXIS, CertLevel.L2, '3.0');
+  check('v3.0 L2 객관식 12/30 과락 + 실습 42/70 (60%) 불변',
+    s2v3.passTotal === 60 &&
+      s2v3.sections[0].gateKey === 'objective_score_min_12' &&
+      s2v3.sections[1].floorPct === 60);
+
+  // L1: Part C 하드컷 신설 (8/20 = 40%) — v2.0에는 없었다.
+  const s1v3 = getScoring(CertType.AXIS, CertLevel.L1, '3.0');
+  check('v3.0 L1 Part C 하드컷 신설 (part_c_min_8)',
+    s1v3.sections.find((x) => x.part === ExamPart.ESSAY)?.gateKey === 'part_c_min_8' &&
+      s1v3.sections.find((x) => x.part === ExamPart.ESSAY)?.floorPct === 40);
+  const l1v3PartC = computeWeightedResult(s1v3, (p) => (p === ExamPart.ESSAY ? 35 : 100));
+  check('v3.0 L1 Part C 7/20 → part_c_min_8=false (v2.0에서는 합격이던 케이스)',
+    !l1v3PartC.passed && l1v3PartC.gateResults['part_c_min_8'] === false);
+
+  // 경계밴드: 총점 55~64, L3 객관식 20~28 신설, 실습 13~19 (×0.5 환산 척도).
+  const l3v3Band = sessionReviewV2(CertLevel.L3, { total: 58, objective: 24, practice: 15 }, '3.0');
+  check('v3.0 L3 경계밴드 + 과락 사유 (스키마 enum 문자열)',
+    l3v3Band.reviewReasons.includes('총점 경계밴드(55~64)') &&
+      l3v3Band.reviewReasons.includes('객관식 경계밴드(20~28)') &&
+      l3v3Band.reviewReasons.includes('실습형 과락(16 미만)'),
+    JSON.stringify(l3v3Band.reviewReasons));
+  const l1v3Band = sessionReviewV2(
+    CertLevel.L1, { total: 60, objective: 15, practice: 40, partC: 7 }, '3.0',
+  );
+  check('v3.0 L1 Part C 경계밴드(6~10) + 최저기준 미달(8 미만)',
+    l1v3Band.reviewReasons.includes('Part C 경계밴드(6~10)') &&
+      l1v3Band.reviewReasons.includes('Part C 최저기준 미달(8 미만)'),
+    JSON.stringify(l1v3Band.reviewReasons));
+
+  process.env.L3_PRACTICALS_ENABLED = 'false';
+}
+
 console.log(`\n${'─'.repeat(50)}`);
 console.log(`RESULT: ${passCount} passed, ${failCount} failed`);
 process.exit(failCount === 0 ? 0 : 1);

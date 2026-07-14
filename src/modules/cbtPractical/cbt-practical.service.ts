@@ -6,6 +6,7 @@ import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-ob
 import { ConfigService } from '@nestjs/config';
 import { ExamSessionPauseService } from '../adminMonitor/exam-session-pause.service';
 import { assertRegistrationActiveForSession } from '../cbtSessions/registration-active-guard';
+import { isV2OrLater, toSpecVersion } from '../cbtSessions/exam-spec';
 import { evaluatePromptScope, SiblingTaskSnapshot } from './prompt-scope-guard';
 
 /**
@@ -30,18 +31,19 @@ export function isExamAiAllowed(aiToolAllowed: string | null | undefined): boole
 }
 
 /**
- * 시험 표준 v2.0 레벨 게이트: 내장 AI 어시스턴트는 L2 실습에서만 허용된다.
- *   - L1: 응시 모드가 AI 전면 금지 (ai_use_blocked — L1 기획서 v2.0 3-3,
+ * 시험 표준 v2.0+ 레벨 게이트: 내장 AI 어시스턴트는 L2 실습에서만 허용된다.
+ *   - L1: 응시 모드가 AI 전면 금지 (ai_use_blocked — L1 기획서 3-3,
  *     잠금 브라우저 + 고정 템플릿 + 유사도 검사). Part B(실행계획서)도 예외 없음.
- *   - L3: AI 도구 없이 '판단력'만 평가한다 (L3 기획서 v2.0 3-1).
- * 이 게이트는 과제별 aiToolAllowed(문항 정책)보다 우선한다. v1.1 세션은
- * 종전대로 과제 정책만 따른다 — 진행 중 세션의 규칙은 바뀌지 않는다.
+ *   - L3: AI 도구 없이 '판단력'만 평가한다 (L3 기획서 3-1).
+ * 이 게이트는 과제별 aiToolAllowed(문항 정책)보다 우선하며 v2.0과 v3.0에 모두
+ * 적용된다. v1.1 세션만 종전대로 과제 정책을 따른다 — 진행 중 세션의 규칙은
+ * 바뀌지 않는다.
  */
 export function isSessionAiAllowed(
   specVersion: string | null | undefined,
   level: string | null | undefined,
 ): boolean {
-  if (specVersion !== '2.0') return true; // legacy: task-level policy decides
+  if (!isV2OrLater(toSpecVersion(specVersion))) return true; // legacy: task-level policy decides
   return level === 'L2';
 }
 

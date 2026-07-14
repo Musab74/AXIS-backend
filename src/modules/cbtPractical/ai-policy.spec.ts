@@ -14,6 +14,14 @@ describe('isSessionAiAllowed (v2.0 level gate)', () => {
     expect(isSessionAiAllowed('2.0', 'L3')).toBe(false);
   });
 
+  it('applies the same level gate to spec v3.0 sessions', () => {
+    // Regression guard: a `=== '2.0'` fork here would silently re-enable the
+    // embedded AI for every v3 L1/L3 session (L1 ai_use_blocked violation).
+    expect(isSessionAiAllowed('3.0', 'L2')).toBe(true);
+    expect(isSessionAiAllowed('3.0', 'L1')).toBe(false);
+    expect(isSessionAiAllowed('3.0', 'L3')).toBe(false);
+  });
+
   it('leaves legacy v1.1 sessions to the per-task policy', () => {
     expect(isSessionAiAllowed('1.1', 'L1')).toBe(true);
     expect(isSessionAiAllowed('1.1', 'L3')).toBe(true);

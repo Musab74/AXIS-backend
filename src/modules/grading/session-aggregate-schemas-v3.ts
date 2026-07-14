@@ -1,24 +1,18 @@
 /**
- * v2.0 session-aggregate JSON Schemas (draft-07), embedded VERBATIM from the
- * official standard documents so the aggregation service can validate without
- * build-time asset copying. Source of truth:
- *   new_doc_l3/1_AXIS L1/4_채점/AXIS_L1_채점_세션집계_JSON스키마_v1_0.json
- *   new_doc_l3/2_AXIS L2/3_채점/AXIS_L2_채점_세션집계_JSON스키마_v1_0.json
- *   new_doc_l3/3_AXIS L3/3_AI 채점/AXIS_L3_채점_세션집계_JSON스키마_v1_0.json
+ * v3.0 session-aggregate JSON Schemas (draft-07), embedded VERBATIM from the
+ * new_version_v3 standard documents so the aggregation service can validate
+ * without build-time asset copying. Source of truth:
+ *   new_version_v3/1_AXIS L1/1_시스템업로드·검토용_패키지/5_시험·채점_설정/AXIS_L1_채점_세션집계_JSON스키마.json (schema_version 1.2, 150분)
+ *   new_version_v3/2_AXIS L2/2_AI 채점/3_채점_세션집계_JSON스키마.json (schema_version 1.1, 120분)
+ *   new_version_v3/3_AXIS L3/2_AI 채점/3_AXIS_L3_채점_세션집계_JSON스키마.json (schema_version 1.0, 90분, 실습 8문항)
  * GENERATED — do not hand-edit; re-copy from the source JSON on standard bumps.
  */
 
-import {
-  L1_SESSION_AGGREGATE_SCHEMA_V3,
-  L2_SESSION_AGGREGATE_SCHEMA_V3,
-  L3_SESSION_AGGREGATE_SCHEMA_V3,
-} from './session-aggregate-schemas-v3';
-
-export const L1_SESSION_AGGREGATE_SCHEMA = {
+export const L1_SESSION_AGGREGATE_SCHEMA_V3 = {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://ainex.example/schemas/axis-l1-session-aggregate-v1.1.json",
+  "$id": "https://ainex.example/schemas/axis-l1-session-aggregate.json",
   "title": "AXIS L1 채점 세션 집계 레코드",
-  "description": "v1.1 정정(2026-07-06): review_reasons에 'Part C 검수 기준(12 미만)' 추가 — B·C 템플릿 v2.0 mandatory_expert_review와 동기화(Part C는 하드컷이 아닌 검수 트리거, 기획서 3-1). 응시자 1인의 L1 세션 집계(Part A 25 + Part B 55 + Part C 20 = 100점, 120분). 전 필드 [시스템 산출]. AI 산출분은 파트·문항 단위 레코드에 기록. 합격 잠금은 전문가·관리자 승인 후.",
+  "description": "2026-07-08 개정(schema 1.2): 검정시간 150분(40/70/40)·합격 총점 60·하드컷 4종(총점60/A10/B33/C8)·경계밴드(55~64/8~12/30~36/6~10) 반영 — 확정안·시험설정 명세와 동기화. 응시자 1인의 L1 세션 집계(Part A 25 + Part B 55 + Part C 20 = 100점, 150분). 전 필드 [시스템 산출]. AI 산출분은 파트·문항 단위 레코드에 기록. 합격 잠금은 전문가·관리자 승인 후.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -36,7 +30,7 @@ export const L1_SESSION_AGGREGATE_SCHEMA = {
   ],
   "properties": {
     "schema_version": {
-      "const": "1.1"
+      "const": "1.2"
     },
     "qualification": {
       "const": "AXIS"
@@ -76,7 +70,7 @@ export const L1_SESSION_AGGREGATE_SCHEMA = {
           "format": "date-time"
         },
         "exam_time_limit_minutes": {
-          "const": 120
+          "const": 150
         },
         "ai_use_blocked": {
           "const": true,
@@ -205,18 +199,21 @@ export const L1_SESSION_AGGREGATE_SCHEMA = {
           "uniqueItems": true,
           "items": {
             "enum": [
-              "총점 경계권(65~74)",
-              "Part A 경계밴드(11~15)",
+              "총점 경계권(55~64)",
+              "Part A 경계밴드(8~12)",
               "Part B 경계밴드(30~36)",
-              "Part A 최저기준 미달(13 미만)",
+              "Part C 경계밴드(6~10)",
+              "Part A 최저기준 미달(10 미만)",
               "Part B 최저기준 미달(33 미만)",
-              "Part C 검수 기준(12 미만)",
+              "Part C 최저기준 미달(8 미만)",
+              "Part C 추가 검수(12 미만)",
               "계획-리스크 게이트 발동",
               "치명 실패 패턴",
               "위험 플래그",
               "confidence 0.75 미만",
-              "제출물 유사도 상위",
-              "이의신청"
+              "제출물 유사도 상위(0.85 플래그)",
+              "이의신청",
+              "재접속·이탈 이벤트"
             ]
           }
         },
@@ -229,21 +226,25 @@ export const L1_SESSION_AGGREGATE_SCHEMA = {
     },
     "gate_results": {
       "type": "object",
-      "description": "하드컷 3종 (L1 기획서 v2.0 3-1). Part C는 하드컷 없음 — 치명 실패로 통제",
+      "description": "하드컷 4종 — 비보상 모델(2026-07-08 확정): 총점 60 AND A 10 AND B 33 AND C 8",
       "additionalProperties": false,
       "required": [
-        "total_score_min_70",
-        "part_a_min_13",
-        "part_b_min_33"
+        "total_score_min_60",
+        "part_a_min_10",
+        "part_b_min_33",
+        "part_c_min_8"
       ],
       "properties": {
-        "total_score_min_70": {
+        "total_score_min_60": {
           "type": "boolean"
         },
-        "part_a_min_13": {
+        "part_a_min_10": {
           "type": "boolean"
         },
         "part_b_min_33": {
+          "type": "boolean"
+        },
+        "part_c_min_8": {
           "type": "boolean"
         }
       }
@@ -311,11 +312,11 @@ export const L1_SESSION_AGGREGATE_SCHEMA = {
   }
 } as const;
 
-export const L2_SESSION_AGGREGATE_SCHEMA = {
+export const L2_SESSION_AGGREGATE_SCHEMA_V3 = {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://ainex.example/schemas/axis-l2-session-aggregate-v1.0.json",
+  "$id": "https://ainex.example/schemas/axis-l2-session-aggregate-v1.1.json",
   "title": "AXIS L2 채점 세션 집계 레코드",
-  "description": "응시자 1인의 L2 시험 세션 집계(객관식 30 + 실습 3과제 70 + 이중 게이트). 전 필드 [시스템 산출]. AI 보조채점 산출분은 과제 단위 레코드에 기록되고 본 레코드는 집계다. 합격 잠금은 전문가·관리자 승인 후.",
+  "description": "응시자 1인의 L2 시험 세션 집계(객관식 30 + 실습 3과제 70 + 삼중 게이트(총점 60·객관식 12·실습 42)). 전 필드 [시스템 산출]. AI 보조채점 산출분은 과제 단위 레코드에 기록되고 본 레코드는 집계다. 합격 잠금은 전문가·관리자 승인 후. [v1.1: 120분 체제·합격선 60/12/42·경계밴드 55~64/10~14 확정 반영]",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -334,7 +335,7 @@ export const L2_SESSION_AGGREGATE_SCHEMA = {
   ],
   "properties": {
     "schema_version": {
-      "const": "1.0"
+      "const": "1.1"
     },
     "qualification": {
       "const": "AXIS"
@@ -374,7 +375,8 @@ export const L2_SESSION_AGGREGATE_SCHEMA = {
           "format": "date-time"
         },
         "exam_time_limit_minutes": {
-          "const": 90
+          "const": 120,
+          "description": "확정 검정시간 — 객관식 50분 + 실습 70분(기획서 v2.2 3-1)"
         },
         "embedded_ai_version": {
           "type": "string",
@@ -382,7 +384,14 @@ export const L2_SESSION_AGGREGATE_SCHEMA = {
         },
         "prompt_log_ref": {
           "type": "string",
-          "description": "응시자 지시문 로그 참조 — 과제 B 채점 근거·이의신청 자료"
+          "description": "응시자 지시문 로그 참조 — 전 과제 공통 채점 보조 근거('AI 지시·맥락 설계' 요소)·이의신청 자료 (AI채점 프롬프트 v1.1 재정의)"
+        },
+        "timing_log_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "문항·과제별 타임스탬프 로그 참조 — 파일럿 소프트 리미트 시간 검증 데이터(재확정안 자동확정 규칙)"
         }
       }
     },
@@ -536,10 +545,10 @@ export const L2_SESSION_AGGREGATE_SCHEMA = {
           "uniqueItems": true,
           "items": {
             "enum": [
-              "총점 경계권(65~74)",
-              "객관식 경계밴드(13~17)",
+              "총점 경계권(55~64)",
+              "객관식 경계밴드(10~14)",
               "실습형 경계밴드(38~45)",
-              "객관식 최저기준 미달(15 미만)",
+              "객관식 최저기준 미달(12 미만)",
               "실습형 최저기준 미달(42 미만)",
               "단일 과제 40% 미만",
               "산출물-검증 게이트 발동",
@@ -560,18 +569,18 @@ export const L2_SESSION_AGGREGATE_SCHEMA = {
     },
     "gate_results": {
       "type": "object",
-      "description": "이중 최저기준 하드컷 + 총점 (L2 기획서 v2.0 3-2)",
+      "description": "삼중 하드컷 — 총점 60·객관식 12(40%)·실습 42(60%), 하나라도 false면 불합격 (기획서 v2.2 3-2)",
       "additionalProperties": false,
       "required": [
-        "total_score_min_70",
-        "objective_score_min_15",
+        "total_score_min_60",
+        "objective_score_min_12",
         "practice_score_min_42"
       ],
       "properties": {
-        "total_score_min_70": {
+        "total_score_min_60": {
           "type": "boolean"
         },
-        "objective_score_min_15": {
+        "objective_score_min_12": {
           "type": "boolean"
         },
         "practice_score_min_42": {
@@ -647,11 +656,11 @@ export const L2_SESSION_AGGREGATE_SCHEMA = {
   }
 } as const;
 
-export const L3_SESSION_AGGREGATE_SCHEMA = {
+export const L3_SESSION_AGGREGATE_SCHEMA_V3 = {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://ainex.example/schemas/axis-l3-session-aggregate-v1.0.json",
+  "$id": "https://ainex.example/schemas/axis-l3-session-aggregate.json",
   "title": "AXIS L3 채점 세션 집계 레코드",
-  "description": "응시자 1인의 시험 세션 전체(객관식 총점 + 실습 4문항 + 합격 게이트) 집계 레코드. 전 필드 [시스템 산출] — AI는 이 레코드를 생성하지 않으며, 문항 단위 AI 산출분은 AXIS_L3_AI채점_결과_JSON스키마_v1_0.json(문항 레코드)에 기록되고 본 레코드는 그 집계다. 합격 판정 잠금은 전문가 검수·관리자 승인 이후에만 수행한다.",
+  "description": "응시자 1인의 시험 세션 전체(객관식 총점 + 실습 8문항 + 합격 게이트) 집계 레코드. 전 필드 [시스템 산출] — AI는 이 레코드를 생성하지 않으며, 문항 단위 AI 산출분은 2_AXIS_L3_AI채점_문항레코드_JSON스키마.json(문항 레코드)에 기록되고 본 레코드는 그 집계다. 합격 판정 잠금은 전문가 검수·관리자 승인 이후에만 수행한다.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -711,7 +720,7 @@ export const L3_SESSION_AGGREGATE_SCHEMA = {
           "format": "date-time"
         },
         "exam_time_limit_minutes": {
-          "const": 70
+          "const": 90
         },
         "scoring_run_id": {
           "type": [
@@ -739,7 +748,7 @@ export const L3_SESSION_AGGREGATE_SCHEMA = {
           "type": "number",
           "minimum": 0,
           "maximum": 40,
-          "description": "4문항 provisional_item_total 합. 전문가 조정 반영 후 갱신"
+          "description": "8문항 원점수 합 × 0.5 환산 (0~40). 전문가 조정 반영 후 갱신"
         },
         "total_score": {
           "type": "number",
@@ -750,8 +759,8 @@ export const L3_SESSION_AGGREGATE_SCHEMA = {
     },
     "practice_item_refs": {
       "type": "array",
-      "minItems": 4,
-      "maxItems": 4,
+      "minItems": 8,
+      "maxItems": 8,
       "description": "문항 단위 채점 레코드(문항 스키마 v1.0) 참조",
       "items": {
         "type": "object",
@@ -781,7 +790,8 @@ export const L3_SESSION_AGGREGATE_SCHEMA = {
           "item_score": {
             "type": "number",
             "minimum": 0,
-            "maximum": 10
+            "maximum": 10,
+            "description": "문항 원점수(10점 루브릭). 세션 practice_score는 8문항 원점수 합 × 0.5 환산(40점 만점)"
           }
         }
       }
@@ -845,11 +855,12 @@ export const L3_SESSION_AGGREGATE_SCHEMA = {
           "uniqueItems": true,
           "items": {
             "enum": [
-              "총점 경계권(65~74)",
-              "실습형 경계밴드(22~26)",
-              "실습형 최저기준 미달(24 미만)",
-              "객관식 최저기준 미달(30 미만)",
-              "리스크 판단형 5점 이하",
+              "총점 경계밴드(55~64)",
+              "객관식 경계밴드(20~28)",
+              "실습형 경계밴드(13~19)",
+              "실습형 과락(16 미만)",
+              "객관식 과락(24 미만)",
+              "리스크 판단형 문항 저득점",
               "게이트 발동 문항 존재",
               "위험 플래그",
               "critical 위험",
@@ -868,21 +879,21 @@ export const L3_SESSION_AGGREGATE_SCHEMA = {
     },
     "gate_results": {
       "type": "object",
-      "description": "이중 최저기준 하드컷 + 총점 (메인 기획서 v2.0 4-4)",
+      "description": "하드컷 — 총점 60 + 파트 과락 40% (재량 판정 없음)",
       "additionalProperties": false,
       "required": [
-        "total_score_min_70",
-        "objective_score_min_30",
-        "practice_score_min_24"
+        "total_score_min_60",
+        "objective_score_min_24",
+        "practice_score_min_16"
       ],
       "properties": {
-        "total_score_min_70": {
+        "total_score_min_60": {
           "type": "boolean"
         },
-        "objective_score_min_30": {
+        "objective_score_min_24": {
           "type": "boolean"
         },
-        "practice_score_min_24": {
+        "practice_score_min_16": {
           "type": "boolean"
         }
       }
@@ -956,32 +967,3 @@ export const L3_SESSION_AGGREGATE_SCHEMA = {
   }
 } as const;
 
-export const SESSION_AGGREGATE_SCHEMAS = {
-  L1: L1_SESSION_AGGREGATE_SCHEMA,
-  L2: L2_SESSION_AGGREGATE_SCHEMA,
-  L3: L3_SESSION_AGGREGATE_SCHEMA,
-} as const;
-
-/**
- * Version-keyed schema sets: '2.0' sessions validate against the schemas above
- * (new_doc_l3 standard); '3.0' sessions against the new_version_v3 set
- * (L1 1.2 / L2 1.1 / L3 1.0-90분판). Records must carry the matching
- * `schema_version` const — see SESSION_AGGREGATE_SCHEMA_VERSIONS.
- */
-export const SESSION_AGGREGATE_SCHEMAS_BY_SPEC = {
-  '2.0': SESSION_AGGREGATE_SCHEMAS,
-  '3.0': {
-    L1: L1_SESSION_AGGREGATE_SCHEMA_V3,
-    L2: L2_SESSION_AGGREGATE_SCHEMA_V3,
-    L3: L3_SESSION_AGGREGATE_SCHEMA_V3,
-  },
-} as const;
-
-/** The `schema_version` const each (specVersion, level) record must declare. */
-export const SESSION_AGGREGATE_SCHEMA_VERSIONS: Record<
-  '2.0' | '3.0',
-  Record<'L1' | 'L2' | 'L3', string>
-> = {
-  '2.0': { L1: '1.1', L2: '1.0', L3: '1.0' },
-  '3.0': { L1: '1.2', L2: '1.1', L3: '1.0' },
-};
