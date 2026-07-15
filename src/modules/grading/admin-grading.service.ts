@@ -42,6 +42,8 @@ import {
   parseDeliverableReview,
   type DeliverableReview,
 } from './deliverable-review';
+import { MailerService } from '../../integrations/mailer/mailer.service';
+import { courseLabel } from '../../common/utils/course-label.util';
 
 const GRADING_SLA_DAYS = 14;
 
@@ -132,6 +134,7 @@ export class AdminGradingService {
     private readonly ncp: NcObjectStorageService,
     private readonly config: ConfigService,
     private readonly aggregates: SessionAggregateService,
+    private readonly mailer: MailerService,
   ) {}
 
   /** Grading queue scope — `null` means all cert series (admins + unscoped experts). */
@@ -1156,7 +1159,11 @@ export class AdminGradingService {
   async confirmDecision(actorId: string, actorRoles: string[], sessionId: string) {
     const session = await this.prisma.examSession.findUnique({
       where: { id: sessionId },
-      include: { essayAnswers: true },
+      include: {
+        essayAnswers: true,
+        // Needed for the neutral "results available" notice fired at the end.
+        user: { select: { id: true, email: true, name: true } },
+      },
     });
     if (!session) throw new NotFoundException('Session not found');
     const specVersion = toSpecVersion(session.specVersion);
@@ -1261,6 +1268,24 @@ export class AdminGradingService {
 
     // WP7: the confirmed decision lands in the aggregate record.
     this.aggregates.rebuildSafely(sessionId, 'confirm_decision');
+
+    // Neutral "your results are available" notice — fires on BOTH
+    // CONFIRMED_PASS and CONFIRMED_FAIL (this line is reached for either).
+    // Carries NO score / pass-fail; the candidate must log in to see the result.
+    // Fire-and-forget like the payment receipt: MailerService never throws,
+    // dedupes on the sessionId key (exactly-once even for bulk-confirm), and
+    // respects MAIL_ENABLED / null-email SKIP internally.
+    void this.mailer.send({
+      userId: session.userId,
+      toEmail: session.user?.email,
+      template: 'EXAM_RESULT_RELEASED',
+      dedupeKey: `EXAM_RESULT_RELEASED:${sessionId}`,
+      vars: {
+        name: session.user?.name ?? '',
+        course: courseLabel(session.certType, session.level),
+        url: `${this.config.get<string>('frontendUrl') ?? ''}/mypage`,
+      },
+    });
 
     this.logger.log(
       JSON.stringify({
