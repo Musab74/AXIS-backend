@@ -199,7 +199,7 @@ export class ProctorController {
     @Body() dto: MonitorThumbDto,
   ): Promise<{ ok: true }> {
     await this.requireOwnedSession(userId, dto.sessionId);
-    await this.heartbeat.markAlive(dto.sessionId);
+    await this.heartbeat.markWebcam(dto.sessionId, dto.ts);
     await this.adminMonitor.emitWebcamFrame({
       sessionId: dto.sessionId,
       imageBase64: dto.imageBase64,
@@ -220,7 +220,7 @@ export class ProctorController {
     @Body() dto: MonitorThumbDto,
   ): Promise<{ ok: true }> {
     await this.requireOwnedSession(userId, dto.sessionId);
-    await this.heartbeat.markAlive(dto.sessionId);
+    await this.heartbeat.markScreen(dto.sessionId, dto.ts);
     await this.adminMonitor.emitScreenFrame({
       sessionId: dto.sessionId,
       imageBase64: dto.imageBase64,
@@ -231,7 +231,7 @@ export class ProctorController {
 
   /**
    * Verify that `userId` owns `sessionId` and that the session is live. We
-   * cache positive verifications in Redis for 5 min so the 3 s frame cadence
+   * cache positive verifications in Redis for 5 min so the 5 s frame cadence
    * doesn't translate into one Prisma round-trip per frame in steady state.
    */
   private async requireOwnedSession(userId: string, sessionId: string): Promise<void> {

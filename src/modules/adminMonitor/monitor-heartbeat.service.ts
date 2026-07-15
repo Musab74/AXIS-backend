@@ -30,6 +30,14 @@ export class MonitorHeartbeatService {
     return `monitor:lastseen:${sessionId}`;
   }
 
+  private webcamKey(sessionId: string): string {
+    return `monitor:webcam:${sessionId}`;
+  }
+
+  private screenKey(sessionId: string): string {
+    return `monitor:screen:${sessionId}`;
+  }
+
   /** Bump the per-session heartbeat. Safe to call from any request handler. */
   async markAlive(sessionId: string): Promise<void> {
     const now = Date.now();
@@ -41,6 +49,73 @@ export class MonitorHeartbeatService {
         this.logger.warn(`markAlive failed sessionId=${sessionId}: ${(err as Error).message}`);
       }
     }
+  }
+
+  /** Bump webcam-stream freshness (separate from overall liveness). */
+  async markWebcam(sessionId: string, ts: number = Date.now()): Promise<void> {
+    this.local.set(this.webcamKey(sessionId), ts);
+    await this.markAlive(sessionId);
+    if (this.redis.isReady()) {
+      try {
+        await this.redis.set(this.webcamKey(sessionId), String(ts), this.TTL_SEC);
+      } catch (err) {
+        this.logger.warn(`markWebcam failed sessionId=${sessionId}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** Bump screen-share stream freshness. */
+  async markScreen(sessionId: string, ts: number = Date.now()): Promise<void> {
+    this.local.set(this.screenKey(sessionId), ts);
+    await this.markAlive(sessionId);
+    if (this.redis.isReady()) {
+      try {
+        await this.redis.set(this.screenKey(sessionId), String(ts), this.TTL_SEC);
+      } catch (err) {
+        this.logger.warn(`markScreen failed sessionId=${sessionId}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  async getWebcamLastSeen(sessionId: string): Promise<number | null> {
+    return this.readTs(this.webcamKey(sessionId));
+  }
+
+  async getScreenLastSeen(sessionId: string): Promise<number | null> {
+    return this.readTs(this.screenKey(sessionId));
+  }
+
+  private async readTs(key: string): Promise<number | null> {
+    if (this.redis.isReady()) {
+      try {
+        const raw = await this.redis.get(key);
+        if (raw) {
+          const n = Number(raw);
+          if (Number.isFinite(n)) return n;
+        }
+      } catch (err) {
+        this.logger.warn(`readTs failed key=${key}: ${(err as Error).message}`);
+      }
+    }
+    return this.local.get(key) ?? null;
+  }
+
+  async getMediaLastSeenMany(
+    sessionIds: string[],
+  ): Promise<{ webcam: Map<string, number>; screen: Map<string, number> }> {
+    const webcam = new Map<string, number>();
+    const screen = new Map<string, number>();
+    await Promise.all(
+      sessionIds.map(async (id) => {
+        const [w, s] = await Promise.all([
+          this.getWebcamLastSeen(id),
+          this.getScreenLastSeen(id),
+        ]);
+        if (w != null) webcam.set(id, w);
+        if (s != null) screen.set(id, s);
+      }),
+    );
+    return { webcam, screen };
   }
 
   /**
@@ -78,9 +153,15 @@ export class MonitorHeartbeatService {
   /** Drop a session's heartbeat — used when a session terminates / submits. */
   async clear(sessionId: string): Promise<void> {
     this.local.delete(sessionId);
+    this.local.delete(this.webcamKey(sessionId));
+    this.local.delete(this.screenKey(sessionId));
     if (this.redis.isReady()) {
       try {
-        await this.redis.del(this.key(sessionId));
+        await Promise.all([
+          this.redis.del(this.key(sessionId)),
+          this.redis.del(this.webcamKey(sessionId)),
+          this.redis.del(this.screenKey(sessionId)),
+        ]);
       } catch (err) {
         this.logger.warn(`clear failed sessionId=${sessionId}: ${(err as Error).message}`);
       }

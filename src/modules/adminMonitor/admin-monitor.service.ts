@@ -12,10 +12,12 @@ const RECENT_EVENT_LIMIT = 50;
 /**
  * A candidate counts as "live" if we've seen any authenticated proctor
  * activity (heartbeat) within this many ms. The 30 s window matches the
- * 3 s thumbnail cadence × ~10 missed pings, which lines up with a typical
+ * 5 s thumbnail cadence × ~6 missed pings, which lines up with a typical
  * laptop sleep / network blip.
  */
 export const HEARTBEAT_LIVE_MS = 30_000;
+/** Webcam/screen chip shows "on" when a frame landed within this window. */
+export const MEDIA_FRESH_MS = 15_000;
 /**
  * Disconnected candidates are kept in the live list this long before we hide
  * them — gives the proctor a chance to see "who just dropped" while still
@@ -41,6 +43,12 @@ export interface LiveSessionRow {
   status: LiveStatus;
   /** Epoch-ms of the last heartbeat for this session (null = never seen). */
   lastSeenAt: number | null;
+  /** True when a webcam thumb arrived within {@link MEDIA_FRESH_MS}. */
+  webcamOnline: boolean;
+  /** True when a screen-share thumb arrived within {@link MEDIA_FRESH_MS}. */
+  screenOnline: boolean;
+  webcamLastAt: number | null;
+  screenLastAt: number | null;
 }
 
 export interface LiveSummary {
@@ -89,9 +97,13 @@ export class AdminMonitorService {
     // fall back to "trust the DB" so a transient Redis outage doesn't make
     // every live candidate suddenly look disconnected to the proctor.
     const redisUp = this.redis.isReady();
+    const ids = sessions.map((s) => s.id);
     const heartbeats = redisUp
-      ? await this.heartbeat.getLastSeenMany(sessions.map((s) => s.id))
+      ? await this.heartbeat.getLastSeenMany(ids)
       : new Map<string, number>();
+    const media = redisUp
+      ? await this.heartbeat.getMediaLastSeenMany(ids)
+      : { webcam: new Map<string, number>(), screen: new Map<string, number>() };
 
     return sessions
       .map((s) => {
@@ -101,6 +113,8 @@ export class AdminMonitorService {
         const warnings = s.proctorWarnings;
         const lastSeen = heartbeats.get(s.id) ?? null;
         const status = this.deriveStatus(s.status, warnings, lastSeen, now, redisUp);
+        const webcamLastAt = media.webcam.get(s.id) ?? null;
+        const screenLastAt = media.screen.get(s.id) ?? null;
         return {
           sessionId: s.id,
           candidateName: s.user.name,
@@ -110,6 +124,10 @@ export class AdminMonitorService {
           warnings,
           status,
           lastSeenAt: lastSeen,
+          webcamOnline: webcamLastAt != null && now - webcamLastAt < MEDIA_FRESH_MS,
+          screenOnline: screenLastAt != null && now - screenLastAt < MEDIA_FRESH_MS,
+          webcamLastAt,
+          screenLastAt,
         };
       })
       // Drop disconnected sessions whose grace window has expired AND that

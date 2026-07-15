@@ -18,12 +18,14 @@ const ALERT_CHANNEL = 'admin:exam-alert';
 const LIVE_STATUS_CHANNEL = 'admin:live-status';
 const WEBCAM_FRAME_CHANNEL = 'admin:webcam-frame';
 const SCREEN_FRAME_CHANNEL = 'admin:screen-frame';
+const MEDIA_PULSE_CHANNEL = 'admin:media-pulse';
 const NOTIFICATION_CHANNEL = 'admin:notification';
+const AI_ALERT_CHANNEL = 'proctor:ai-alert';
 const ADMIN_ROOM = 'admin:monitor';
 const sessionRoom = (sessionId: string): string => `monitor:session:${sessionId}`;
 
 // Latest-frame cache used by the proctor-event evidence-attach path. The
-// frontend already POSTs webcam + screen thumbnails every 3s while the exam
+// frontend already POSTs webcam + screen thumbnails every 5s while the exam
 // is running; we mirror the most recent one into Redis with a short TTL so
 // `CbtSessionsService.recordProctorEventInternal` can grab it on demand
 // when a face/eye/identity heuristic fires (which itself debounces ≥3s).
@@ -35,7 +37,14 @@ export const LAST_WEBCAM_FRAME_KEY = (sessionId: string): string =>
 export const LAST_SCREEN_FRAME_KEY = (sessionId: string): string =>
   `proctor:lastframe:screen:${sessionId}`;
 
-const ADMIN_ROLES = new Set(['proctor', 'exam_admin', 'super_admin']);
+// Lowercased JWT roles — must stay in parity with HTTP @Roles on the monitor controller.
+const ADMIN_ROLES = new Set([
+  'proctor',
+  'exam_admin',
+  'super_admin',
+  'grading_admin',
+  'expert',
+]);
 
 interface JwtPayload {
   sub?: string;
@@ -63,6 +72,12 @@ export interface MonitorFramePayload {
   sessionId: string;
   /** Base64-encoded JPEG without the `data:` prefix. Kept ≤ ~32 KB by the client. */
   imageBase64: string;
+  ts: number;
+}
+
+export interface MediaPulsePayload {
+  sessionId: string;
+  channel: 'webcam' | 'screen';
   ts: number;
 }
 
@@ -167,6 +182,48 @@ export class AdminMonitorGateway implements OnModuleInit, OnGatewayConnection {
         this.logger.warn(`bad notification payload: ${(err as Error).message}`);
       }
     });
+    await this.redis.subscribe(MEDIA_PULSE_CHANNEL, (msg) => {
+      try {
+        const raw = JSON.parse(msg) as MediaPulsePayload & { _tag?: string };
+        if (this.wasLocallyEmitted(raw._tag)) return;
+        const { _tag: _ignored, ...p } = raw;
+        void _ignored;
+        this.server?.to(ADMIN_ROOM).emit('monitor:media-pulse', p);
+      } catch (err) {
+        this.logger.warn(`bad media-pulse payload: ${(err as Error).message}`);
+      }
+    });
+    // Bridge AI proctor alerts (published on /ws firehose) into the /admin
+    // monitor feed so MonitoringPage can show + jump without a second socket.
+    // Local emit only — do NOT re-publish, or every worker would amplify the alert.
+    await this.redis.subscribe(AI_ALERT_CHANNEL, (msg) => {
+      try {
+        const ai = JSON.parse(msg) as {
+          sessionId: string;
+          severity?: string;
+          captionKo?: string;
+          captionEn?: string;
+          type?: string;
+          ts?: number;
+        };
+        if (!ai.sessionId) return;
+        const level: ExamAlertPayload['level'] =
+          ai.severity === 'HIGH' ? 'HIGH' : ai.severity === 'MED' || ai.severity === 'MEDIUM' ? 'MEDIUM' : 'INFO';
+        const message =
+          ai.captionKo?.trim() ||
+          ai.captionEn?.trim() ||
+          ai.type ||
+          'AI proctor alert';
+        this.server?.to(ADMIN_ROOM).emit('exam:alert', {
+          sessionId: ai.sessionId,
+          level,
+          message,
+          ts: ai.ts ?? Date.now(),
+        } satisfies ExamAlertPayload);
+      } catch (err) {
+        this.logger.warn(`bad ai-alert bridge payload: ${(err as Error).message}`);
+      }
+    });
   }
 
   /**
@@ -231,6 +288,7 @@ export class AdminMonitorGateway implements OnModuleInit, OnGatewayConnection {
     this.rememberLocal(tag);
     this.server?.to(sessionRoom(p.sessionId)).emit('monitor:webcam-frame', p);
     await this.redis.publish(WEBCAM_FRAME_CHANNEL, JSON.stringify({ ...p, _tag: tag }));
+    void this.emitMediaPulse({ sessionId: p.sessionId, channel: 'webcam', ts: p.ts });
     // Best-effort: mirror the latest frame into Redis so a heuristic
     // proctor event (GAZE_AWAY, NO_FACE, etc.) can attach it as evidence.
     // Stored as `<ts>|<base64>` so consumers can sanity-check freshness.
@@ -247,11 +305,20 @@ export class AdminMonitorGateway implements OnModuleInit, OnGatewayConnection {
     this.rememberLocal(tag);
     this.server?.to(sessionRoom(p.sessionId)).emit('monitor:screen-frame', p);
     await this.redis.publish(SCREEN_FRAME_CHANNEL, JSON.stringify({ ...p, _tag: tag }));
+    void this.emitMediaPulse({ sessionId: p.sessionId, channel: 'screen', ts: p.ts });
     void this.redis.set(
       LAST_SCREEN_FRAME_KEY(p.sessionId),
       `${p.ts}|${p.imageBase64}`,
       LAST_FRAME_TTL_SEC,
     );
+  }
+
+  /** Lightweight roster signal — no image bytes; updates cam/screen chips for all admins. */
+  async emitMediaPulse(p: MediaPulsePayload): Promise<void> {
+    const tag = `m:${p.channel}:${p.sessionId}:${p.ts}`;
+    this.rememberLocal(tag);
+    this.server?.to(ADMIN_ROOM).emit('monitor:media-pulse', p);
+    await this.redis.publish(MEDIA_PULSE_CHANNEL, JSON.stringify({ ...p, _tag: tag }));
   }
 
   async handleConnection(@ConnectedSocket() socket: Socket): Promise<void> {

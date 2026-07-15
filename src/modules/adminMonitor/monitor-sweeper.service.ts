@@ -136,6 +136,25 @@ export class MonitorSweeperService implements OnModuleInit, OnModuleDestroy {
               this.logger.warn(`emit session-update failed: ${(err as Error).message}`),
             );
         }
+        // Surface disconnect / reconnect on the live feed (once per transition).
+        if (prev && prev.status !== status) {
+          const name = s.user?.name ?? 'Unknown';
+          if (status === 'disconnected' && prev.status !== 'disconnected') {
+            void this.gateway.emitAlert({
+              sessionId: s.id,
+              level: 'MEDIUM',
+              message: `${name} — network disconnected`,
+              ts: now,
+            });
+          } else if (prev.status === 'disconnected' && status !== 'disconnected') {
+            void this.gateway.emitAlert({
+              sessionId: s.id,
+              level: 'INFO',
+              message: `${name} — network reconnected`,
+              ts: now,
+            });
+          }
+        }
       }
 
       // Drop in-memory snapshots for sessions that have left IN_PROGRESS — the

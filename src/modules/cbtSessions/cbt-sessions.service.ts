@@ -924,30 +924,45 @@ export class CbtSessionsService {
         },
       });
 
-      if (newCount >= 2) {
+      if (newCount >= 1) {
         const examName = `${updated.certType.replace('_', '-')} ${updated.level}`;
+        const statusLabel = shouldTerminate
+          ? 'terminated'
+          : newCount >= 3
+            ? 'danger'
+            : 'warning';
         void this.adminMonitor.emitSessionUpdate({
           sessionId: updated.id,
-          status: shouldTerminate ? 'terminated' : 'warning',
+          status: statusLabel,
           progressPct: 0,
           warnings: newCount,
           candidateName: '',
           examName,
         });
-        void this.notifications.notify({
-          category: 'CHEATING',
-          titleKo: shouldTerminate ? '시험 강제 종료' : '부정행위 경고',
-          titleEn: shouldTerminate ? 'Exam force-terminated' : 'Cheating warning',
-          bodyKo: shouldTerminate
-            ? `${examName} — ${newCount}회 경고 누적으로 시험이 강제 종료되었습니다. (${type})`
-            : `${examName} — ${newCount}회 경고가 누적되었습니다. (${type})`,
-          bodyEn: shouldTerminate
-            ? `${examName} — exam force-terminated after ${newCount} warnings (${type}).`
-            : `${examName} — ${newCount} warning(s) accumulated (${type}).`,
-          severity: shouldTerminate ? 'HIGH' : 'MEDIUM',
-          href: '/monitoring',
-          meta: { sessionId: updated.id, eventType: type, warnings: newCount },
+        void this.adminMonitor.emitAlert({
+          sessionId: updated.id,
+          level: shouldTerminate ? 'HIGH' : newCount >= 2 ? 'MEDIUM' : 'INFO',
+          message: shouldTerminate
+            ? `${examName} — force-terminated (${type}, ${newCount} warnings)`
+            : `${examName} — warning ${newCount}/${FULLSCREEN_WARNING_THRESHOLD} (${type})`,
+          ts: Date.now(),
         });
+        if (newCount >= 2) {
+          void this.notifications.notify({
+            category: 'CHEATING',
+            titleKo: shouldTerminate ? '시험 강제 종료' : '부정행위 경고',
+            titleEn: shouldTerminate ? 'Exam force-terminated' : 'Cheating warning',
+            bodyKo: shouldTerminate
+              ? `${examName} — ${newCount}회 경고 누적으로 시험이 강제 종료되었습니다. (${type})`
+              : `${examName} — ${newCount}회 경고가 누적되었습니다. (${type})`,
+            bodyEn: shouldTerminate
+              ? `${examName} — exam force-terminated after ${newCount} warnings (${type}).`
+              : `${examName} — ${newCount} warning(s) accumulated (${type}).`,
+            severity: shouldTerminate ? 'HIGH' : 'MEDIUM',
+            href: '/monitoring',
+            meta: { sessionId: updated.id, eventType: type, warnings: newCount },
+          });
+        }
       }
       if (shouldTerminate) {
         // Clear the in-memory heartbeat so the sweeper doesn't keep treating
@@ -970,7 +985,7 @@ export class CbtSessionsService {
     // the just-created proctoringEvent row with cached webcam + screen frames
     // so the admin "Cheating evidence" modal has thumbnails for face/eye/
     // identity/phone heuristics. The frame cache is populated by the live
-    // monitor (webcam-thumb / screen-thumb endpoints) every 3s during the
+    // monitor (webcam-thumb / screen-thumb endpoints) every 5s during the
     // exam, so a freshly fired GAZE_AWAY event has a frame waiting in
     // Redis. Fire-and-forget — never block the candidate response on this.
     if (result.eventId) {
