@@ -90,9 +90,15 @@ export interface GradingQueueRow {
   certType: string;
   level: CertLevel;
   roundNumber: number | null;
+  year: number | null;
+  scheduleId: string | null;
   writtenScore: number | null;
+  practicalScore: number | null;
+  totalScore: number | null;
   practicalState: PracticalState;
   result: 'pass' | 'fail' | null;
+  /** True when the parent schedule's results have been announced publicly. */
+  announced: boolean;
   dueDate: string;
   daysToDue: number;
   overdue: boolean;
@@ -203,7 +209,16 @@ export class AdminGradingService {
     const registrations = regIds.length
       ? await this.prisma.registration.findMany({
           where: { id: { in: regIds } },
-          include: { schedule: { select: { roundNumber: true } } },
+          include: {
+            schedule: {
+              select: {
+                id: true,
+                year: true,
+                roundNumber: true,
+                resultsAnnouncedAt: true,
+              },
+            },
+          },
         })
       : [];
     const regById = new Map(registrations.map((r) => [r.id, r]));
@@ -236,9 +251,14 @@ export class AdminGradingService {
         certType: s.certType,
         level: s.level,
         roundNumber: reg?.schedule?.roundNumber ?? null,
+        year: reg?.schedule?.year ?? null,
+        scheduleId: reg?.schedule?.id ?? null,
         writtenScore: s.writtenScore,
+        practicalScore: s.practicalScore,
+        totalScore: s.totalScore,
         practicalState,
         result: s.passed === true ? 'pass' : s.passed === false ? 'fail' : null,
+        announced: !!reg?.schedule?.resultsAnnouncedAt,
         dueDate: due.toISOString(),
         daysToDue: Math.ceil((due.getTime() - now) / 86_400_000),
         overdue,

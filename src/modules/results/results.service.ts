@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   CertType,
   ExamSessionStatus,
@@ -25,7 +29,9 @@ export class ResultsService {
 
   /**
    * All exam sessions for a user that are submitted or graded.
-   * Includes the breakdown by subject and a derived "partial pass" flag for L2/L1.
+   * Scores / pass / certificate are only exposed after the round is announced
+   * (ExamSchedule.resultsAnnouncedAt). Until then the row still appears so the
+   * candidate knows grading is in progress.
    */
   async listMine(userId: string) {
     const certificates = await this.certificates.syncPassedCertificatesForUser(userId);
@@ -60,6 +66,8 @@ export class ResultsService {
       const cert = certBySessionId.get(s.id);
       const reg = s.registrationId ? regById.get(s.registrationId) : undefined;
       const graded = s.status === ExamSessionStatus.GRADED;
+      const announced = !!reg?.schedule.resultsAnnouncedAt;
+      const showScores = graded && announced;
       return {
         id: s.id,
         certType: s.certType,
@@ -73,28 +81,32 @@ export class ResultsService {
         submittedAt: s.submittedAt,
         startedAt: s.startedAt,
         gradedAt: graded ? s.updatedAt : null,
-        writtenScore: s.writtenScore,
-        practicalScore: s.practicalScore,
-        totalScore: s.totalScore,
-        passed: s.passed,
-        failReason: s.failReason,
-        partialPass: this.derivePartial(s),
-        certificate: cert
-          ? {
-              certNumber: cert.certNumber,
-              issuedAt: cert.issuedAt,
-              validUntil: cert.validUntil,
-            }
-          : null,
-        breakdown: s.gradingResults.map((r) => ({
-        part: r.part,
-        subjectIndex: r.subjectIndex,
-        subjectName: r.subjectName,
-        earned: r.earned,
-        total: r.total,
-        percentage: r.percentage,
-        subjectFailed: r.subjectFailed,
-        })),
+        announced,
+        writtenScore: showScores ? s.writtenScore : null,
+        practicalScore: showScores ? s.practicalScore : null,
+        totalScore: showScores ? s.totalScore : null,
+        passed: showScores ? s.passed : null,
+        failReason: showScores ? s.failReason : null,
+        partialPass: showScores ? this.derivePartial(s) : null,
+        certificate:
+          showScores && cert
+            ? {
+                certNumber: cert.certNumber,
+                issuedAt: cert.issuedAt,
+                validUntil: cert.validUntil,
+              }
+            : null,
+        breakdown: showScores
+          ? s.gradingResults.map((r) => ({
+              part: r.part,
+              subjectIndex: r.subjectIndex,
+              subjectName: r.subjectName,
+              earned: r.earned,
+              total: r.total,
+              percentage: r.percentage,
+              subjectFailed: r.subjectFailed,
+            }))
+          : [],
       };
     });
   }
@@ -116,7 +128,7 @@ export class ResultsService {
 
   /**
    * Public summary rows for axisexam.com/results — driven by ExamSchedule + graded ExamSession rows.
-   * Admins control visibility by setting schedule status (COMPLETED = 발표 완료).
+   * Admins control visibility by setting ExamSchedule.resultsAnnouncedAt (합격 발표 공개).
    *
    * Public hygiene rules (admin endpoints are unaffected):
    * - A schedule whose exam date has passed with zero confirmed registrations is
@@ -166,7 +178,7 @@ export class ResultsService {
       const failCount = g?.failCount ?? 0;
       const registeredCount = registeredBySchedule.get(s.id) ?? 0;
       const examMs = s.examDate.getTime();
-      const publicationState = this.resolvePublicationState(s.status, examMs, now);
+      const publicationState = this.resolvePublicationState(s, examMs, now);
       return {
         examMs,
         item: {
@@ -220,7 +232,7 @@ export class ResultsService {
     if (!schedule || schedule.status === ScheduleStatus.CANCELLED) {
       throw new NotFoundException('Schedule not found');
     }
-    if (schedule.status !== ScheduleStatus.COMPLETED) {
+    if (!schedule.resultsAnnouncedAt) {
       throw new NotFoundException('Results are not published for this round yet');
     }
 
@@ -332,7 +344,7 @@ export class ResultsService {
     // public lookup refuses; the user can still see results via My Page.
     if (!this.birthDatesMatch(reg.user.birthDate, input.birthDate)) return NOT_FOUND;
 
-    if (reg.schedule.status !== ScheduleStatus.COMPLETED) {
+    if (!reg.schedule.resultsAnnouncedAt) {
       return { status: 'NOT_ANNOUNCED' as const };
     }
 
@@ -382,14 +394,142 @@ export class ResultsService {
   }
 
   private resolvePublicationState(
-    status: ScheduleStatus,
+    schedule: { status: ScheduleStatus; resultsAnnouncedAt: Date | null },
     examStartMs: number,
     nowMs: number,
   ): 'announced' | 'grading' | 'upcoming' {
-    if (status === ScheduleStatus.COMPLETED) return 'announced';
-    if (status === ScheduleStatus.CANCELLED) return 'upcoming';
+    if (schedule.resultsAnnouncedAt != null) return 'announced';
+    if (schedule.status === ScheduleStatus.CANCELLED) return 'upcoming';
     if (examStartMs <= nowMs) return 'grading';
     return 'upcoming';
+  }
+
+  /**
+   * Announce results for the schedules that own the selected graded sessions.
+   * Sets resultsAnnouncedAt (and COMPLETED if the exam window is already past).
+   * Idempotent for already-announced schedules.
+   */
+  async publishBySessionIds(actorId: string, sessionIds: string[]) {
+    const uniqueIds = [...new Set(sessionIds.map((id) => id?.trim()).filter(Boolean))];
+    if (uniqueIds.length === 0) {
+      throw new BadRequestException('Select at least one graded result to publish');
+    }
+
+    const sessions = await this.prisma.examSession.findMany({
+      where: { id: { in: uniqueIds } },
+      select: {
+        id: true,
+        status: true,
+        registrationId: true,
+      },
+    });
+    if (sessions.length === 0) {
+      throw new BadRequestException('No matching sessions found');
+    }
+
+    const notGraded = sessions.filter((s) => s.status !== ExamSessionStatus.GRADED);
+    if (notGraded.length > 0) {
+      throw new BadRequestException(
+        `${notGraded.length} selected session(s) are not finalized (GRADED) yet`,
+      );
+    }
+
+    const regIds = sessions
+      .map((s) => s.registrationId)
+      .filter((id): id is string => !!id);
+    if (regIds.length === 0) {
+      throw new BadRequestException('Selected sessions have no linked registration/schedule');
+    }
+
+    const regs = await this.prisma.registration.findMany({
+      where: { id: { in: regIds } },
+      select: {
+        id: true,
+        scheduleId: true,
+        schedule: {
+          select: {
+            id: true,
+            certType: true,
+            level: true,
+            year: true,
+            roundNumber: true,
+            resultsAnnouncedAt: true,
+            status: true,
+            examDate: true,
+          },
+        },
+      },
+    });
+    const scheduleByReg = new Map(regs.map((r) => [r.id, r.schedule]));
+    const schedules = new Map<string, (typeof regs)[number]['schedule']>();
+    for (const s of sessions) {
+      if (!s.registrationId) continue;
+      const sch = scheduleByReg.get(s.registrationId);
+      if (sch) schedules.set(sch.id, sch);
+    }
+    if (schedules.size === 0) {
+      throw new BadRequestException('Could not resolve schedules for selected sessions');
+    }
+
+    const now = new Date();
+    const published: {
+      scheduleId: string;
+      certType: string;
+      level: string;
+      year: number;
+      roundNumber: number;
+      alreadyAnnounced: boolean;
+    }[] = [];
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const sch of schedules.values()) {
+        const already = !!sch.resultsAnnouncedAt;
+        if (!already) {
+          await tx.examSchedule.update({
+            where: { id: sch.id },
+            data: {
+              resultsAnnouncedAt: now,
+              // Keep COMPLETED semantics for "exam ended"; announce may happen after.
+              ...(sch.status !== ScheduleStatus.COMPLETED && sch.status !== ScheduleStatus.CANCELLED
+                ? { status: ScheduleStatus.COMPLETED }
+                : {}),
+            },
+          });
+        }
+        published.push({
+          scheduleId: sch.id,
+          certType: sch.certType,
+          level: sch.level,
+          year: sch.year,
+          roundNumber: sch.roundNumber,
+          alreadyAnnounced: already,
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'RESULTS_PUBLISHED',
+          entityType: 'ExamSchedule',
+          entityId: published.map((p) => p.scheduleId).join(','),
+          after: {
+            scheduleIds: published.map((p) => p.scheduleId),
+            sessionIds: uniqueIds,
+            newlyAnnounced: published.filter((p) => !p.alreadyAnnounced).map((p) => p.scheduleId),
+          } as Prisma.InputJsonValue,
+          reason: 'Admin pass announcement',
+        },
+      });
+    });
+
+    const newly = published.filter((p) => !p.alreadyAnnounced);
+    return {
+      ok: true as const,
+      sessionCount: uniqueIds.length,
+      scheduleCount: published.length,
+      newlyAnnounced: newly.length,
+      schedules: published,
+    };
   }
 
   private formatRoundLabel(certType: CertType, level: string, roundNumber: number): string {

@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -26,9 +37,22 @@ export class AdminGradingController {
   @Get('queue')
   @ApiOperation({ summary: 'Admin grading queue (all cert series for experts)' })
   queue(@CurrentUser() viewer: AuthenticatedUser, @Query('status') status?: string) {
-    const valid: GradingQueueStatus[] = ['all', 'auto_done', 'ai_graded', 'reviewing', 'final', 'overdue', 'terminated'];
-    const s = (status ?? 'all') as GradingQueueStatus;
-    return this.svc.listQueue(valid.includes(s) ? s : 'all', { id: viewer.id, roles: viewer.roles });
+    const valid: GradingQueueStatus[] = [
+      'all',
+      'auto_done',
+      'ai_graded',
+      'reviewing',
+      'final',
+      'overdue',
+      'terminated',
+    ];
+    if (status != null && status !== '' && !valid.includes(status as GradingQueueStatus)) {
+      throw new BadRequestException(
+        `Invalid status "${status}". Expected one of: ${valid.join(', ')}`,
+      );
+    }
+    const s = ((status || 'all') as GradingQueueStatus);
+    return this.svc.listQueue(s, { id: viewer.id, roles: viewer.roles });
   }
 
   @Get('queue/counts')

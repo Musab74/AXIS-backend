@@ -21,6 +21,7 @@ describe('ResultsService.listPublicRounds', () => {
     examDate: Date;
     status?: ScheduleStatus;
     id?: string;
+    resultsAnnouncedAt?: Date | null;
   }) {
     seq += 1;
     return {
@@ -31,6 +32,12 @@ describe('ResultsService.listPublicRounds', () => {
       year: overrides.examDate.getFullYear(),
       examDate: overrides.examDate,
       status: overrides.status ?? ScheduleStatus.UPCOMING,
+      resultsAnnouncedAt:
+        overrides.resultsAnnouncedAt !== undefined
+          ? overrides.resultsAnnouncedAt
+          : overrides.status === ScheduleStatus.COMPLETED
+            ? overrides.examDate
+            : null,
     };
   }
 

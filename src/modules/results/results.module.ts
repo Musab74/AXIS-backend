@@ -1,13 +1,14 @@
 import { Module } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import { CertificatesModule } from '../certificates/certificates.module';
+import { AdminResultsController } from './admin-results.controller';
 import { PublicResultsController } from './public-results.controller';
 import { ResultsController } from './results.controller';
 import { ResultsService } from './results.service';
 
 @Module({
   imports: [CertificatesModule],
-  controllers: [ResultsController, PublicResultsController],
+  controllers: [ResultsController, PublicResultsController, AdminResultsController],
   providers: [ResultsService, PrismaService],
   exports: [ResultsService],
 })
