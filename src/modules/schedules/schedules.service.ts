@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { CertLevel, CertType, Prisma, RegistrationStatus, ScheduleStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { RedisService } from '../../integrations/redis/redis.service';
+import { isSeriesSuspended } from '../cbtSessions/exam-spec';
 
 /**
  * True when the error is Prisma's unique-constraint violation. Prisma's
@@ -21,6 +22,24 @@ export interface CreateOnDemandScheduleDto {
   capacity?: number;      // defaults to 100 for online
   venue?: string;         // defaults to "ONLINE_CBT"
 }
+
+/** Admin manual exam-round registration (full registration window + capacity). */
+export interface CreateAdminScheduleDto {
+  certType: CertType;
+  level: CertLevel;
+  examDate: string; // YYYY-MM-DD or ISO datetime
+  examStartTime: string; // HH:mm
+  registrationStart: string; // YYYY-MM-DD or ISO datetime
+  registrationEnd: string; // YYYY-MM-DD or ISO datetime
+  capacity?: number;
+  venue?: string;
+  venueDetail?: string;
+  status?: ScheduleStatus;
+  roundNumber?: number;
+}
+
+/** Admin partial update of an existing exam round. */
+export type UpdateAdminScheduleDto = Partial<CreateAdminScheduleDto>;
 
 export interface ListSchedulesQuery {
   certType?: CertType;
@@ -220,6 +239,9 @@ export class SchedulesService {
    * Redis key `schedule:seats:{id}` is the authoritative fast cache; falls back to DB.
    */
   async getAvailable(certType?: CertType, level?: CertLevel) {
+    // AXIS-C / AXIS-H (and any SUSPENDED_SERIES) must not advertise bookable seats.
+    if (certType && isSeriesSuspended(certType)) return [];
+
     // Keep L1/L2 rolling like L3: lazily materialize a window of future online
     // sessions so the registration list never runs dry when seeded rounds lapse.
     if (certType && (level === CertLevel.L1 || level === CertLevel.L2)) {
@@ -303,6 +325,8 @@ export class SchedulesService {
     level: CertLevel = CertLevel.L3,
     slotUnitMinutes = L3_SLOT_UNIT_MINUTES,
   ) {
+    if (isSeriesSuspended(certType)) return [];
+
     const dayStart = new Date(`${date}T00:00:00.000Z`);
     const dayEnd = new Date(`${date}T23:59:59.999Z`);
 
@@ -527,6 +551,8 @@ export class SchedulesService {
     certType?: CertType,
     level?: CertLevel,
   ) {
+    if (certType && isSeriesSuspended(certType)) return [];
+
     const monthStart = new Date(year, month - 1, 1);
     const monthEnd = new Date(year, month, 0, 23, 59, 59);
 
@@ -613,6 +639,252 @@ export class SchedulesService {
     if (!s) return;
     const remaining = s.capacity - s.currentCount;
     await this.redis.set(`schedule:seats:${scheduleId}`, String(remaining), 3600);
+  }
+
+  /**
+   * Admin: create a scheduled exam round with explicit registration window,
+   * capacity, venue, and start time. Uses existing ExamSchedule columns only
+   * (no schema change). Round number auto-increments when omitted.
+   */
+  async createAdmin(dto: CreateAdminScheduleDto) {
+    if (!dto.certType) throw new BadRequestException('certType is required');
+    if (!dto.level) throw new BadRequestException('level is required');
+    if (!dto.examDate) throw new BadRequestException('examDate is required');
+    if (!dto.examStartTime || !/^\d{2}:\d{2}$/.test(dto.examStartTime)) {
+      throw new BadRequestException('examStartTime must be HH:mm');
+    }
+    if (!dto.registrationStart) throw new BadRequestException('registrationStart is required');
+    if (!dto.registrationEnd) throw new BadRequestException('registrationEnd is required');
+
+    const examDate = this.parseAdminDateTime(dto.examDate, dto.examStartTime);
+    const registrationStart = this.parseAdminDateTime(dto.registrationStart, '00:00');
+    const registrationEnd = this.parseAdminDateTime(dto.registrationEnd, '23:59');
+
+    if (isNaN(examDate.getTime())) throw new BadRequestException('Invalid examDate');
+    if (isNaN(registrationStart.getTime())) throw new BadRequestException('Invalid registrationStart');
+    if (isNaN(registrationEnd.getTime())) throw new BadRequestException('Invalid registrationEnd');
+    if (registrationEnd.getTime() < registrationStart.getTime()) {
+      throw new BadRequestException('registrationEnd must be on or after registrationStart');
+    }
+    if (examDate.getTime() < registrationStart.getTime()) {
+      throw new BadRequestException('examDate must be on or after registrationStart');
+    }
+
+    const capacity = dto.capacity ?? 300;
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 99999) {
+      throw new BadRequestException('capacity must be an integer between 1 and 99999');
+    }
+
+    const status = dto.status ?? ScheduleStatus.UPCOMING;
+    const allowed: ScheduleStatus[] = [
+      ScheduleStatus.UPCOMING,
+      ScheduleStatus.REGISTRATION_OPEN,
+      ScheduleStatus.REGISTRATION_CLOSED,
+    ];
+    if (!allowed.includes(status)) {
+      throw new BadRequestException('status must be UPCOMING, REGISTRATION_OPEN, or REGISTRATION_CLOSED');
+    }
+
+    const year = examDate.getFullYear();
+    const venue = dto.venue?.trim() || 'ONLINE_CBT';
+    const venueDetail = dto.venueDetail?.trim() || undefined;
+
+    const ROUND_RETRY_LIMIT = 8;
+    let roundNumber =
+      dto.roundNumber ??
+      (await this.nextOnDemandRoundNumber(dto.certType, dto.level, year));
+
+    if (dto.roundNumber != null) {
+      if (!Number.isInteger(dto.roundNumber) || dto.roundNumber < 1) {
+        throw new BadRequestException('roundNumber must be a positive integer');
+      }
+      const clash = await this.prisma.examSchedule.findUnique({
+        where: {
+          certType_level_year_roundNumber: {
+            certType: dto.certType,
+            level: dto.level,
+            year,
+            roundNumber: dto.roundNumber,
+          },
+        },
+        select: { id: true },
+      });
+      if (clash) {
+        throw new BadRequestException(
+          `Round ${dto.roundNumber} already exists for ${dto.certType} ${dto.level} ${year}`,
+        );
+      }
+    }
+
+    let schedule;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        schedule = await this.prisma.examSchedule.create({
+          data: {
+            certType: dto.certType,
+            level: dto.level,
+            year,
+            roundNumber,
+            examDate,
+            examStartTime: dto.examStartTime,
+            registrationStart,
+            registrationEnd,
+            capacity,
+            venue,
+            venueDetail,
+            status,
+          },
+        });
+        break;
+      } catch (err) {
+        if (dto.roundNumber != null || !isUniqueViolation(err) || attempt >= ROUND_RETRY_LIMIT) {
+          throw err;
+        }
+        roundNumber = await this.nextOnDemandRoundNumber(dto.certType, dto.level, year);
+      }
+    }
+
+    await this.warmSeatCache(schedule.id);
+    return schedule;
+  }
+
+  /**
+   * Admin: update an existing exam round. Validates date window / capacity /
+   * unique (cert, level, year, round) the same way as createAdmin.
+   */
+  async updateAdmin(id: string, dto: UpdateAdminScheduleDto) {
+    const existing = await this.prisma.examSchedule.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Schedule not found');
+
+    const certType = dto.certType ?? existing.certType;
+    const level = dto.level ?? existing.level;
+    const examStartTime = dto.examStartTime ?? existing.examStartTime;
+    if (!/^\d{2}:\d{2}$/.test(examStartTime)) {
+      throw new BadRequestException('examStartTime must be HH:mm');
+    }
+
+    const examDate = dto.examDate
+      ? this.parseAdminDateTime(dto.examDate, examStartTime)
+      : (() => {
+          const d = new Date(existing.examDate);
+          const [hh, mm] = examStartTime.split(':');
+          d.setHours(Number(hh), Number(mm), 0, 0);
+          return d;
+        })();
+    const registrationStart = dto.registrationStart
+      ? this.parseAdminDateTime(dto.registrationStart, '00:00')
+      : existing.registrationStart;
+    const registrationEnd = dto.registrationEnd
+      ? this.parseAdminDateTime(dto.registrationEnd, '23:59')
+      : existing.registrationEnd;
+
+    if (isNaN(examDate.getTime())) throw new BadRequestException('Invalid examDate');
+    if (isNaN(registrationStart.getTime())) throw new BadRequestException('Invalid registrationStart');
+    if (isNaN(registrationEnd.getTime())) throw new BadRequestException('Invalid registrationEnd');
+    if (registrationEnd.getTime() < registrationStart.getTime()) {
+      throw new BadRequestException('registrationEnd must be on or after registrationStart');
+    }
+    if (examDate.getTime() < registrationStart.getTime()) {
+      throw new BadRequestException('examDate must be on or after registrationStart');
+    }
+
+    const capacity = dto.capacity ?? existing.capacity;
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 99999) {
+      throw new BadRequestException('capacity must be an integer between 1 and 99999');
+    }
+    if (capacity < existing.currentCount) {
+      throw new BadRequestException(
+        `capacity cannot be less than current registrations (${existing.currentCount})`,
+      );
+    }
+
+    const status = dto.status ?? existing.status;
+    const allowed: ScheduleStatus[] = [
+      ScheduleStatus.UPCOMING,
+      ScheduleStatus.REGISTRATION_OPEN,
+      ScheduleStatus.REGISTRATION_CLOSED,
+      ScheduleStatus.IN_PROGRESS,
+      ScheduleStatus.COMPLETED,
+      ScheduleStatus.CANCELLED,
+    ];
+    if (!allowed.includes(status)) {
+      throw new BadRequestException('Invalid schedule status');
+    }
+
+    const year = examDate.getFullYear();
+    const roundNumber = dto.roundNumber ?? existing.roundNumber;
+    if (!Number.isInteger(roundNumber) || roundNumber < 1) {
+      throw new BadRequestException('roundNumber must be a positive integer');
+    }
+
+    const keyChanged =
+      certType !== existing.certType ||
+      level !== existing.level ||
+      year !== existing.year ||
+      roundNumber !== existing.roundNumber;
+    if (keyChanged) {
+      const clash = await this.prisma.examSchedule.findUnique({
+        where: {
+          certType_level_year_roundNumber: { certType, level, year, roundNumber },
+        },
+        select: { id: true },
+      });
+      if (clash && clash.id !== id) {
+        throw new BadRequestException(
+          `Round ${roundNumber} already exists for ${certType} ${level} ${year}`,
+        );
+      }
+    }
+
+    const venue = dto.venue !== undefined ? dto.venue.trim() || 'ONLINE_CBT' : existing.venue;
+    const venueDetail =
+      dto.venueDetail !== undefined
+        ? dto.venueDetail.trim() || null
+        : existing.venueDetail;
+
+    const schedule = await this.prisma.examSchedule.update({
+      where: { id },
+      data: {
+        certType,
+        level,
+        year,
+        roundNumber,
+        examDate,
+        examStartTime,
+        registrationStart,
+        registrationEnd,
+        capacity,
+        venue,
+        venueDetail,
+        status,
+        cancelledAt:
+          status === ScheduleStatus.CANCELLED
+            ? existing.cancelledAt ?? new Date()
+            : null,
+      },
+    });
+
+    await this.warmSeatCache(schedule.id);
+    return schedule;
+  }
+
+  /** Parse YYYY-MM-DD (optional HH:mm) or full ISO into a Date. */
+  private parseAdminDateTime(raw: string, defaultTime: string): Date {
+    const trimmed = raw.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const [hh, mm] = defaultTime.split(':');
+      const d = new Date(
+        Number(trimmed.slice(0, 4)),
+        Number(trimmed.slice(5, 7)) - 1,
+        Number(trimmed.slice(8, 10)),
+        Number(hh),
+        Number(mm),
+        defaultTime === '23:59' ? 59 : 0,
+        0,
+      );
+      return d;
+    }
+    return new Date(trimmed);
   }
 
   /**

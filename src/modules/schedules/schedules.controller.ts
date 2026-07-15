@@ -1,10 +1,25 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { CertLevel, CertType, ScheduleStatus } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
-import { CreateOnDemandScheduleDto, SchedulesService } from './schedules.service';
+import {
+  CreateAdminScheduleDto,
+  CreateOnDemandScheduleDto,
+  SchedulesService,
+  UpdateAdminScheduleDto,
+} from './schedules.service';
 
 function parseCertQuery(cert: string | undefined): CertType {
   if (!cert) {
@@ -146,6 +161,13 @@ export class ScheduleApiController {
 export class AdminSchedulesController {
   constructor(private readonly svc: SchedulesService) {}
 
+  @Post()
+  @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
+  @ApiOperation({ summary: '관리자: 새 시험 회차 등록 (자격·등급·일시·접수기간)' })
+  create(@Body() dto: CreateAdminScheduleDto) {
+    return this.svc.createAdmin(dto);
+  }
+
   @Get('registrations')
   @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
   @ApiOperation({ summary: '관리자: 등록된 시험 목록 조회(응시자 정보 포함)' })
@@ -159,5 +181,12 @@ export class AdminSchedulesController {
       level,
       scheduleStatus,
     });
+  }
+
+  @Patch(':id')
+  @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
+  @ApiOperation({ summary: '관리자: 시험 회차 수정' })
+  update(@Param('id') id: string, @Body() dto: UpdateAdminScheduleDto) {
+    return this.svc.updateAdmin(id, dto);
   }
 }
