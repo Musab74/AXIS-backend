@@ -44,6 +44,10 @@ import {
   ExamineeRegistrationDetail,
   IssuedPenalty,
   MemberProfile,
+  MemberIdentityHistory,
+  AccountLinkage,
+  IdentityVerificationAttemptSummary,
+  CarrierVerificationEntry,
   RegistrationSummary,
   SearchUsersResult,
   UserActivity,
@@ -959,16 +963,33 @@ export class AdminUsersService {
   }
 
   async getMemberProfile(userId: string): Promise<MemberProfile> {
-    const [detail, user] = await Promise.all([
+    const [detail, user, identityHistory] = await Promise.all([
       this.getExamineeDetail(userId),
       this.prisma.user.findUnique({
         where: { id: userId },
-        include: {
+        select: {
+          id: true,
+          niceVerified: true,
+          ci: true,
+          referenceFaceUpdatedAt: true,
           roles: { where: { revokedAt: null }, orderBy: { grantedAt: 'desc' } },
         },
       }),
+      this.getMemberIdentityHistory(userId),
     ]);
     if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다');
+
+    const accountLinkage: AccountLinkage = {
+      integrated: true,
+      portals: ['axisexam.com', 'cbt.axisexam.com'],
+      niceVerified: user.niceVerified,
+      carrierIdentityBound: !!user.ci,
+      // referenceFaceUpdatedAt is set atomically with the selfie blob — never load the blob here.
+      hasReferenceFace: !!user.referenceFaceUpdatedAt,
+      referenceFaceUpdatedAt: user.referenceFaceUpdatedAt,
+      idImageStored: false,
+    };
+
     return {
       ...detail,
       roles: user.roles.map((r) => r.role),
@@ -976,6 +997,61 @@ export class AdminUsersService {
         role: r.role,
         grantedAt: r.grantedAt,
         grantedBy: r.grantedBy,
+      })),
+      accountLinkage,
+      identityHistory,
+    };
+  }
+
+  async getMemberIdentityHistory(userId: string): Promise<MemberIdentityHistory> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, phone: true },
+    });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다');
+
+    const [attempts, niceSessions] = await Promise.all([
+      this.prisma.identityVerificationAttempt.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      }),
+      user.phone
+        ? this.prisma.niceSession.findMany({
+            where: { resultData: { contains: user.phone } },
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+            select: {
+              authType: true,
+              status: true,
+              ipAddress: true,
+              createdAt: true,
+              completedAt: true,
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    return {
+      carrier: niceSessions.map<CarrierVerificationEntry>((n) => ({
+        authType: n.authType,
+        status: n.status,
+        ipAddress: n.ipAddress,
+        createdAt: n.createdAt,
+        completedAt: n.completedAt,
+      })),
+      attempts: attempts.map<IdentityVerificationAttemptSummary>((a) => ({
+        id: a.id,
+        examSessionId: a.examSessionId,
+        verdict: a.verdict,
+        reasons: Array.isArray(a.reasons) ? (a.reasons as string[]) : [],
+        idType: a.idType,
+        ocrConfidence: a.ocrConfidence,
+        nameMatched: a.nameMatched,
+        birthDateMatched: a.birthDateMatched,
+        faceDecision: a.faceDecision,
+        faceSimilarity: a.faceSimilarity,
+        createdAt: a.createdAt,
       })),
     };
   }

@@ -20,4 +20,10 @@ export class VerifyIdentityDto {
     message: 'expectedBirthDate must be YYYY-MM-DD',
   })
   expectedBirthDate?: string;
+
+  /** Optional CBT exam session id for admin identity-history correlation. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  examSessionId?: string;
 }

@@ -10,6 +10,7 @@ import {
   FaceCompareResult,
   FaceMatchDecision,
 } from '../../integrations/awsRekognition/aws-rekognition.service';
+import { PrismaService } from '../../common/prisma.service';
 import { FaceReferenceService } from '../proctor/face-reference.service';
 
 export type IdentityVerdict = 'PASS' | 'REVIEW' | 'FAIL';
@@ -58,6 +59,8 @@ interface VerifyInput {
   expectedBirthDate?: string;
   /** When set, the verified live-face is stored as the user's reference face on PASS. */
   userId?: string;
+  /** Optional CBT exam session that triggered this verification. */
+  examSessionId?: string;
 }
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
@@ -80,6 +83,7 @@ export class IdentityVerificationService {
     private readonly clova: ClovaOcrService,
     private readonly rekognition: AwsRekognitionService,
     private readonly faceReference: FaceReferenceService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async verify(input: VerifyInput): Promise<IdentityVerificationResult> {
@@ -116,6 +120,7 @@ export class IdentityVerificationService {
     // Persist the verified live-face as the in-exam reference image. Only on
     // PASS — REVIEW/FAIL must not seed a reference that would later mask an
     // imposter swap with a low-confidence match.
+    // ID card bytes are intentionally discarded here and never written to DB.
     if (verdict === 'PASS' && input.userId) {
       try {
         await this.faceReference.setExamReference(input.userId, input.liveFaceImage);
@@ -124,6 +129,21 @@ export class IdentityVerificationService {
           `Failed to persist reference face for user=${input.userId}: ${(err as Error).message}`,
         );
       }
+    }
+
+    if (input.userId) {
+      await this.recordAttempt({
+        userId: input.userId,
+        examSessionId: input.examSessionId,
+        verdict,
+        reasons,
+        idType: idCard.idType,
+        ocrConfidence: idCard.rawConfidence,
+        nameMatched: nameMatch.matched,
+        birthDateMatched: birthDateMatch?.matched ?? null,
+        faceDecision: faceMatch.decision,
+        faceSimilarity: faceMatch.similarity,
+      });
     }
 
     this.logger.log(
@@ -146,6 +166,44 @@ export class IdentityVerificationService {
         selfieByteSize: input.liveFaceImage.length,
       },
     };
+  }
+
+  /**
+   * Structured audit row only — never stores ID-card or selfie image bytes.
+   * Failures here must not block the examinee response.
+   */
+  private async recordAttempt(row: {
+    userId: string;
+    examSessionId?: string;
+    verdict: IdentityVerdict;
+    reasons: string[];
+    idType: string;
+    ocrConfidence: number;
+    nameMatched: boolean;
+    birthDateMatched: boolean | null;
+    faceDecision: string;
+    faceSimilarity: number;
+  }): Promise<void> {
+    try {
+      await this.prisma.identityVerificationAttempt.create({
+        data: {
+          userId: row.userId,
+          examSessionId: row.examSessionId ?? null,
+          verdict: row.verdict,
+          reasons: row.reasons,
+          idType: row.idType,
+          ocrConfidence: row.ocrConfidence,
+          nameMatched: row.nameMatched,
+          birthDateMatched: row.birthDateMatched,
+          faceDecision: row.faceDecision,
+          faceSimilarity: row.faceSimilarity,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to record identity attempt for user=${row.userId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   private async runFaceMatch(

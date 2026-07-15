@@ -65,6 +65,7 @@ export class IdentityVerificationController {
       expectedName,
       expectedBirthDate,
       userId: user.id,
+      examSessionId: dto.examSessionId,
     });
   }
 

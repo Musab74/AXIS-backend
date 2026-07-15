@@ -218,6 +218,52 @@ export interface ExamineeDetail {
 export interface MemberProfile extends ExamineeDetail {
   roles: Role[];
   rolesDetail: UserRoleSummary[];
+  /** axisexam.com ↔ cbt.axisexam.com share one User row (integrated account). */
+  accountLinkage: AccountLinkage;
+  /** Carrier (NICE) + ID OCR + face-match history. Never includes image bytes. */
+  identityHistory: MemberIdentityHistory;
+}
+
+/** Status of the single integrated account used by both public site and CBT. */
+export interface AccountLinkage {
+  /** Always true — axisexam and CBT share the same User / JWT. */
+  integrated: true;
+  portals: ['axisexam.com', 'cbt.axisexam.com'];
+  niceVerified: boolean;
+  /** Carrier identity (CI) is bound — without exposing the CI value. */
+  carrierIdentityBound: boolean;
+  /** Live selfie reference exists for in-exam checks (ID card image is never stored). */
+  hasReferenceFace: boolean;
+  referenceFaceUpdatedAt: Date | null;
+  /** Explicit policy flag for admin UI — ID card images are never persisted. */
+  idImageStored: false;
+}
+
+export interface IdentityVerificationAttemptSummary {
+  id: string;
+  examSessionId: string | null;
+  verdict: string;
+  reasons: string[];
+  idType: string;
+  ocrConfidence: number;
+  nameMatched: boolean;
+  birthDateMatched: boolean | null;
+  faceDecision: string;
+  faceSimilarity: number;
+  createdAt: Date;
+}
+
+export interface CarrierVerificationEntry {
+  authType: string;
+  status: string;
+  ipAddress: string | null;
+  createdAt: Date;
+  completedAt: Date | null;
+}
+
+export interface MemberIdentityHistory {
+  carrier: CarrierVerificationEntry[];
+  attempts: IdentityVerificationAttemptSummary[];
 }
 
 export interface ConsentIpEntry {

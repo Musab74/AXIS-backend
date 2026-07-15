@@ -139,14 +139,15 @@ model User {
   updatedAt              DateTime      @updatedAt @map("updated_at")
   lastLoginAt            DateTime?     @map("last_login_at")
 
-  roles               UserRole[]
-  consents            ConsentLog[]
-  penalties           UserPenalty[]
-  registrations       Registration[]
-  examSessions        ExamSession[]
-  inquiries           Inquiry[]
-  demoProctoringEvents DemoProctoringEvent[]
-  expertCompetencies  ExpertCompetency[]
+  roles                        UserRole[]
+  consents                     ConsentLog[]
+  penalties                    UserPenalty[]
+  registrations                Registration[]
+  examSessions                 ExamSession[]
+  inquiries                    Inquiry[]
+  demoProctoringEvents         DemoProctoringEvent[]
+  expertCompetencies           ExpertCompetency[]
+  identityVerificationAttempts IdentityVerificationAttempt[]
 
   @@map("users")
 }
@@ -231,6 +232,28 @@ model NiceSession {
   completedAt DateTime? @map("completed_at")
 
   @@map("nice_sessions")
+}
+
+/// Pre-exam identity verification attempts (carrier is NICE; this covers ID OCR + face match).
+/// ID card images are NEVER stored — only structured match results for admin review.
+model IdentityVerificationAttempt {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  examSessionId    String?  @map("exam_session_id")
+  verdict          String // PASS | REVIEW | FAIL
+  reasons          Json // string[]
+  idType           String   @map("id_type")
+  ocrConfidence    Float    @map("ocr_confidence")
+  nameMatched      Boolean  @map("name_matched")
+  birthDateMatched Boolean? @map("birth_date_matched")
+  faceDecision     String   @map("face_decision")
+  faceSimilarity   Float    @map("face_similarity")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("identity_verification_attempts")
 }
 
 // ═══════════════════════════════════════════════════════════
