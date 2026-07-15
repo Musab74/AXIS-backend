@@ -1,8 +1,36 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { CertLevel, CertType, Prisma, RegistrationStatus, ScheduleStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { RedisService } from '../../integrations/redis/redis.service';
 import { isSeriesSuspended } from '../cbtSessions/exam-spec';
+
+/** Redis key for admin-managed L3/on-demand slot defaults. */
+const ON_DEMAND_SETTINGS_KEY = 'schedules:on-demand-settings';
+
+export interface OnDemandSettings {
+  /** Inclusive start hour (local) for virtual slots — default 9. */
+  businessHoursStart: number;
+  /** Exclusive end hour (local) for virtual slots — default 18. */
+  businessHoursEnd: number;
+  /** Default capacity for newly materialized / virtual on-demand slots. */
+  defaultSlotCapacity: number;
+  slotUnitMinutes: number;
+}
+
+const DEFAULT_ON_DEMAND_SETTINGS: OnDemandSettings = {
+  businessHoursStart: 9,
+  businessHoursEnd: 18,
+  defaultSlotCapacity: 9999,
+  slotUnitMinutes: 60,
+};
+
+/** Conservative upper bound for marking a session COMPLETED after exam start. */
+const EXAM_DURATION_MINUTES: Record<string, number> = {
+  L3: 90,
+  L2: 120,
+  L1: 150,
+};
 
 /**
  * True when the error is Prisma's unique-constraint violation. Prisma's
@@ -170,11 +198,146 @@ export function computeL3SlotRoundNumber(dateIso: string, hour: number): number 
 }
 
 @Injectable()
-export class SchedulesService {
+export class SchedulesService implements OnModuleInit {
+  private readonly logger = new Logger(SchedulesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    // Catch up immediately on boot (cron also runs every minute).
+    void this.advanceScheduleStatuses();
+  }
+
+  async getOnDemandSettings(): Promise<OnDemandSettings> {
+    const raw = await this.redis.get(ON_DEMAND_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_ON_DEMAND_SETTINGS };
+    try {
+      const parsed = JSON.parse(raw) as Partial<OnDemandSettings>;
+      return {
+        businessHoursStart:
+          typeof parsed.businessHoursStart === 'number'
+            ? parsed.businessHoursStart
+            : DEFAULT_ON_DEMAND_SETTINGS.businessHoursStart,
+        businessHoursEnd:
+          typeof parsed.businessHoursEnd === 'number'
+            ? parsed.businessHoursEnd
+            : DEFAULT_ON_DEMAND_SETTINGS.businessHoursEnd,
+        defaultSlotCapacity:
+          typeof parsed.defaultSlotCapacity === 'number'
+            ? parsed.defaultSlotCapacity
+            : DEFAULT_ON_DEMAND_SETTINGS.defaultSlotCapacity,
+        slotUnitMinutes:
+          typeof parsed.slotUnitMinutes === 'number'
+            ? parsed.slotUnitMinutes
+            : DEFAULT_ON_DEMAND_SETTINGS.slotUnitMinutes,
+      };
+    } catch {
+      return { ...DEFAULT_ON_DEMAND_SETTINGS };
+    }
+  }
+
+  async updateOnDemandSettings(patch: Partial<OnDemandSettings>): Promise<OnDemandSettings> {
+    const current = await this.getOnDemandSettings();
+    const next: OnDemandSettings = {
+      businessHoursStart: patch.businessHoursStart ?? current.businessHoursStart,
+      businessHoursEnd: patch.businessHoursEnd ?? current.businessHoursEnd,
+      defaultSlotCapacity: patch.defaultSlotCapacity ?? current.defaultSlotCapacity,
+      slotUnitMinutes: patch.slotUnitMinutes ?? current.slotUnitMinutes,
+    };
+    if (
+      !Number.isInteger(next.businessHoursStart) ||
+      !Number.isInteger(next.businessHoursEnd) ||
+      next.businessHoursStart < L3_BUSINESS_HOURS_START ||
+      next.businessHoursEnd > L3_BUSINESS_HOURS_END ||
+      next.businessHoursStart >= next.businessHoursEnd
+    ) {
+      throw new BadRequestException(
+        `business hours must be within ${L3_BUSINESS_HOURS_START}–${L3_BUSINESS_HOURS_END} (end exclusive) with start < end`,
+      );
+    }
+    if (
+      !Number.isInteger(next.defaultSlotCapacity) ||
+      next.defaultSlotCapacity < 1 ||
+      next.defaultSlotCapacity > 99999
+    ) {
+      throw new BadRequestException('defaultSlotCapacity must be an integer between 1 and 99999');
+    }
+    if (![30, 60].includes(next.slotUnitMinutes)) {
+      throw new BadRequestException('slotUnitMinutes must be 30 or 60');
+    }
+    await this.redis.set(ON_DEMAND_SETTINGS_KEY, JSON.stringify(next));
+    return next;
+  }
+
+  /**
+   * Advance schedule lifecycle by wall-clock:
+   * Upcoming → Open → Closed → In Progress → Ended (COMPLETED).
+   * Runs every minute so test-taker availability reflects registration/exam windows.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async advanceScheduleStatuses(): Promise<void> {
+    const now = new Date();
+    try {
+      const opened = await this.prisma.examSchedule.updateMany({
+        where: {
+          status: ScheduleStatus.UPCOMING,
+          registrationStart: { lte: now },
+        },
+        data: { status: ScheduleStatus.REGISTRATION_OPEN },
+      });
+
+      // End sessions whose exam window is fully past (per-level duration).
+      let completed = 0;
+      for (const [level, minutes] of Object.entries(EXAM_DURATION_MINUTES)) {
+        const cutoff = new Date(now.getTime() - minutes * 60_000);
+        const res = await this.prisma.examSchedule.updateMany({
+          where: {
+            level: level as CertLevel,
+            status: {
+              in: [
+                ScheduleStatus.REGISTRATION_OPEN,
+                ScheduleStatus.REGISTRATION_CLOSED,
+                ScheduleStatus.IN_PROGRESS,
+              ],
+            },
+            examDate: { lt: cutoff },
+          },
+          data: { status: ScheduleStatus.COMPLETED },
+        });
+        completed += res.count;
+      }
+
+      const inProgress = await this.prisma.examSchedule.updateMany({
+        where: {
+          status: {
+            in: [ScheduleStatus.REGISTRATION_OPEN, ScheduleStatus.REGISTRATION_CLOSED],
+          },
+          examDate: { lte: now },
+        },
+        data: { status: ScheduleStatus.IN_PROGRESS },
+      });
+
+      const closed = await this.prisma.examSchedule.updateMany({
+        where: {
+          status: ScheduleStatus.REGISTRATION_OPEN,
+          registrationEnd: { lt: now },
+          examDate: { gt: now },
+        },
+        data: { status: ScheduleStatus.REGISTRATION_CLOSED },
+      });
+
+      if (opened.count || closed.count || inProgress.count || completed) {
+        this.logger.log(
+          `schedule status advance: open+${opened.count} closed+${closed.count} inProgress+${inProgress.count} completed+${completed}`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`advanceScheduleStatuses failed: ${(err as Error).message}`);
+    }
+  }
 
   async list(q: ListSchedulesQuery = {}) {
     return this.prisma.examSchedule.findMany({
@@ -236,7 +399,8 @@ export class SchedulesService {
 
   /**
    * Returns schedules open for registration with real-time remaining seat count.
-   * Redis key `schedule:seats:{id}` is the authoritative fast cache; falls back to DB.
+   * Remaining seats always come from DB (capacity − currentCount) so they track
+   * registrations immediately; Redis is warmed as a write-through cache.
    */
   async getAvailable(certType?: CertType, level?: CertLevel) {
     // AXIS-C / AXIS-H (and any SUSPENDED_SERIES) must not advertise bookable seats.
@@ -261,12 +425,12 @@ export class SchedulesService {
 
     return Promise.all(
       schedules.map(async (s) => {
-        const cached = await this.redis.get(`schedule:seats:${s.id}`);
-        const remaining =
-          cached !== null ? parseInt(cached, 10) : s.capacity - s.currentCount;
+        const remaining = Math.max(0, s.capacity - s.currentCount);
+        // Keep Redis in sync for any other consumers without letting it go stale.
+        void this.redis.set(`schedule:seats:${s.id}`, String(remaining), 3600);
         return {
           ...s,
-          remainingSeats: Math.max(0, remaining),
+          remainingSeats: remaining,
         };
       }),
     );
@@ -318,6 +482,7 @@ export class SchedulesService {
    * Real ExamSchedule rows take precedence; the rest of the business-hour grid
    * is synthesized as virtual slots (materialized on registration). Works the
    * same for L1/L2/L3 — they are all online on-demand exams.
+   * Business hours / default capacity come from admin on-demand settings.
    */
   async getSlots(
     certType: CertType,
@@ -326,6 +491,12 @@ export class SchedulesService {
     slotUnitMinutes = L3_SLOT_UNIT_MINUTES,
   ) {
     if (isSeriesSuspended(certType)) return [];
+
+    const settings = await this.getOnDemandSettings();
+    const hoursStart = settings.businessHoursStart;
+    const hoursEnd = settings.businessHoursEnd;
+    const defaultCap = settings.defaultSlotCapacity;
+    const unit = slotUnitMinutes || settings.slotUnitMinutes || L3_SLOT_UNIT_MINUTES;
 
     const dayStart = new Date(`${date}T00:00:00.000Z`);
     const dayEnd = new Date(`${date}T23:59:59.999Z`);
@@ -344,14 +515,13 @@ export class SchedulesService {
       const [hh, mm] = s.examStartTime.split(':').map((v) => parseInt(v, 10));
       if (isNaN(hh) || isNaN(mm)) return false;
       const total = hh * 60 + mm;
-      return total % slotUnitMinutes === 0;
+      return total % unit === 0;
     });
 
     const realSlots = await Promise.all(
       normalized.map(async (s) => {
-        const cached = await this.redis.get(`schedule:seats:${s.id}`);
-        const remaining =
-          cached !== null ? parseInt(cached, 10) : s.capacity - s.currentCount;
+        const remaining = Math.max(0, s.capacity - s.currentCount);
+        void this.redis.set(`schedule:seats:${s.id}`, String(remaining), 3600);
         return {
           id: s.id,
           certType: s.certType,
@@ -360,16 +530,15 @@ export class SchedulesService {
           examStartTime: s.examStartTime,
           capacity: s.capacity,
           currentCount: s.currentCount,
-          remainingSeats: Math.max(0, remaining),
+          remainingSeats: remaining,
           venue: s.venue,
-          slotUnitMinutes,
+          slotUnitMinutes: unit,
         };
       }),
     );
 
-    // Synthesize virtual Mon-Fri 9..17 hourly slots. Real DB rows take
-    // precedence at the same start hour (so admin overrides — e.g. capped
-    // capacity or alternate venue — survive).
+    // Synthesize virtual Mon-Fri hourly slots from admin-configured hours.
+    // Real DB rows take precedence at the same start hour.
     const parts = date.split('-').map((v) => parseInt(v, 10));
     if (parts.length !== 3 || parts.some(isNaN)) return realSlots;
     const requested = new Date(parts[0], parts[1] - 1, parts[2]);
@@ -386,7 +555,7 @@ export class SchedulesService {
 
     const now = new Date();
     const merged: typeof realSlots = [];
-    for (let h = L3_BUSINESS_HOURS_START; h < L3_BUSINESS_HOURS_END; h += 1) {
+    for (let h = hoursStart; h < hoursEnd; h += 1) {
       const real = realByHour.get(h);
       if (real) {
         merged.push(real);
@@ -401,19 +570,19 @@ export class SchedulesService {
         level,
         examDate: slotStart,
         examStartTime: `${pad2(h)}:00`,
-        capacity: 9999,
+        capacity: defaultCap,
         currentCount: 0,
-        remainingSeats: 9999,
+        remainingSeats: defaultCap,
         venue: 'ONLINE_CBT',
-        slotUnitMinutes,
+        slotUnitMinutes: unit,
       });
     }
 
-    // Include real slots that fall outside business hours (admin-created)
+    // Include real slots that fall outside configured business hours (admin-created)
     // so they're still bookable.
     for (const s of realSlots) {
       const hh = parseInt(s.examStartTime.split(':')[0] ?? '', 10);
-      if (!isNaN(hh) && (hh < L3_BUSINESS_HOURS_START || hh >= L3_BUSINESS_HOURS_END)) {
+      if (!isNaN(hh) && (hh < hoursStart || hh >= hoursEnd)) {
         merged.push(s);
       }
     }
@@ -499,6 +668,7 @@ export class SchedulesService {
     const registrationStart = new Date();
     const registrationEnd = new Date(Date.now() + 365 * 24 * 60 * 60_000);
 
+    const settings = await this.getOnDemandSettings();
     const uniqueWhere = {
       certType_level_year_roundNumber: {
         certType: input.certType,
@@ -521,7 +691,7 @@ export class SchedulesService {
           examStartTime,
           registrationStart,
           registrationEnd,
-          capacity: 9999,
+          capacity: settings.defaultSlotCapacity,
           venue: 'ONLINE_CBT',
           status: ScheduleStatus.REGISTRATION_OPEN,
         },
@@ -590,9 +760,10 @@ export class SchedulesService {
     // when no ExamSchedule row exists yet — registration materializes the row
     // lazily. (Requires a specific level; the all-levels view stays DB-only.)
     if (isOnDemandLevel(level)) {
+      const settings = await this.getOnDemandSettings();
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const hoursPerDay = L3_BUSINESS_HOURS_END - L3_BUSINESS_HOURS_START;
+      const hoursPerDay = settings.businessHoursEnd - settings.businessHoursStart;
       const lastDay = new Date(year, month, 0).getDate();
       for (let day = 1; day <= lastDay; day += 1) {
         const d = new Date(year, month - 1, day);

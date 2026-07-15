@@ -12,6 +12,7 @@ import {
   CertType,
   EligibilityStatus,
   ExamSessionStatus,
+  PaymentMethod,
   PaymentStatus,
   Prisma,
   RegistrationStatus,
@@ -77,6 +78,15 @@ export class RegistrationsService {
     private readonly ncp: NcObjectStorageService,
     private readonly redis: RedisService,
   ) {}
+
+  /** Keep remaining-seat cache aligned after currentCount changes. */
+  private async syncSeats(scheduleId: string): Promise<void> {
+    try {
+      await this.schedules.warmSeatCache(scheduleId);
+    } catch (err) {
+      this.auditLogger.warn(`syncSeats ${scheduleId}: ${String(err)}`);
+    }
+  }
 
   // ─── L1 eligibility review ───────────────────────────────────────────────
 
@@ -427,6 +437,7 @@ export class RegistrationsService {
         data: { currentCount: { decrement: 1 } },
       }),
     ]);
+    await this.syncSeats(reg.scheduleId);
 
     return { ok: true, refundAmount, refundTier: 'ELIGIBILITY_FULL' };
   }
@@ -529,6 +540,7 @@ export class RegistrationsService {
             data: { currentCount: { decrement: 1 } },
           });
         });
+        await this.syncSeats(row.scheduleId);
       } catch (err) {
         this.auditLogger.warn(`releaseExpiredSeatHolds: skip ${row.id} — ${String(err)}`);
       }
@@ -672,6 +684,7 @@ export class RegistrationsService {
           data: { currentCount: { decrement: 1 } },
         }),
       ]);
+      await this.syncSeats(scheduleId);
     } else if (existing && existing.status !== RegistrationStatus.CANCELLED) {
       throw new ConflictException('Already registered');
     }
@@ -679,7 +692,7 @@ export class RegistrationsService {
     const seatHeldUntil = new Date(Date.now() + SEAT_HOLD_MINUTES * 60_000);
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const created = await this.prisma.$transaction(async (tx) => {
         const regSequence = (await tx.registration.count({
           where: { scheduleId },
         })) + 1;
@@ -718,6 +731,8 @@ export class RegistrationsService {
         });
         return reg;
       });
+      await this.syncSeats(scheduleId);
+      return created;
     } catch (e) {
       // Concurrent double-submit (e.g. the payment page firing create() twice):
       // another request inserted the (userId, scheduleId) seat hold between our
@@ -785,6 +800,7 @@ export class RegistrationsService {
         data: { currentCount: { decrement: 1 } },
       }),
     ]);
+    await this.syncSeats(reg.scheduleId);
     return { ok: true };
   }
 
@@ -881,6 +897,7 @@ export class RegistrationsService {
           data: { currentCount: { decrement: 1 } },
         }),
       ]);
+      await this.syncSeats(reg.scheduleId);
       return { ok: true, refundAmount: 0, refundTier: 'NO_PAYMENT' };
     }
 
@@ -935,6 +952,7 @@ export class RegistrationsService {
         data: { currentCount: { decrement: 1 } },
       }),
     ]);
+    await this.syncSeats(reg.scheduleId);
 
     return { ok: true, refundAmount, refundTier };
   }
@@ -1027,6 +1045,7 @@ export class RegistrationsService {
           data: { currentCount: { decrement: 1 } },
         }),
       ]);
+      await this.syncSeats(reg.scheduleId);
       this.writeAdminRefundAudit({
         actor,
         registrationId: reg.id,
@@ -1063,10 +1082,33 @@ export class RegistrationsService {
     }
 
     if (refundAmount > 0 && confirmedPayment.paymentKey) {
+      const needsRefundAccount =
+        confirmedPayment.method === PaymentMethod.VBANK ||
+        confirmedPayment.method === PaymentMethod.TRANSFER;
+      const refundAccount = dto.refundAccount
+        ? {
+            bank: dto.refundAccount.bank.trim(),
+            // Digits only — PortOne rejects hyphenated account numbers.
+            number: dto.refundAccount.number.replace(/\D+/g, ''),
+            holderName: dto.refundAccount.holderName.trim(),
+            ...(dto.refundAccount.holderPhoneNumber?.trim()
+              ? { holderPhoneNumber: dto.refundAccount.holderPhoneNumber.trim() }
+              : {}),
+          }
+        : undefined;
+      if (
+        needsRefundAccount &&
+        (!refundAccount?.bank || !refundAccount.number || !refundAccount.holderName)
+      ) {
+        throw new BadRequestException(
+          'Virtual-account refunds require refund bank, account number, and holder name.',
+        );
+      }
       await this.portoneGateway.cancelPayment(
         confirmedPayment.paymentKey,
         `[ADMIN:${actor.id}] ${reason}`,
         refundAmount,
+        refundAccount,
       );
     }
 
@@ -1093,6 +1135,8 @@ export class RegistrationsService {
         data: { currentCount: { decrement: 1 } },
       }),
     ]);
+
+    await this.syncSeats(reg.scheduleId);
 
     this.writeAdminRefundAudit({
       actor,
@@ -1188,6 +1232,7 @@ export class RegistrationsService {
       });
       return created;
     });
+    await this.syncSeats(schedule.id);
 
     // Get the fee for this certification level
     const certLevel = await this.prisma.certificationLevel.findFirst({

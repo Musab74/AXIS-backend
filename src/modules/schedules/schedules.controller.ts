@@ -161,6 +161,28 @@ export class ScheduleApiController {
 export class AdminSchedulesController {
   constructor(private readonly svc: SchedulesService) {}
 
+  @Get('on-demand-settings')
+  @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
+  @ApiOperation({ summary: '관리자: L3/온디맨드 슬롯 기본 설정 조회' })
+  getOnDemandSettings() {
+    return this.svc.getOnDemandSettings();
+  }
+
+  @Patch('on-demand-settings')
+  @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
+  @ApiOperation({ summary: '관리자: L3/온디맨드 슬롯 기본 설정 수정' })
+  updateOnDemandSettings(
+    @Body()
+    body: {
+      businessHoursStart?: number;
+      businessHoursEnd?: number;
+      defaultSlotCapacity?: number;
+      slotUnitMinutes?: number;
+    },
+  ) {
+    return this.svc.updateOnDemandSettings(body);
+  }
+
   @Post()
   @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
   @ApiOperation({ summary: '관리자: 새 시험 회차 등록 (자격·등급·일시·접수기간)' })
