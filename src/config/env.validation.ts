@@ -87,27 +87,22 @@ export const envValidationSchema = Joi.object({
   // Exam deadline — number of days user has to complete exam after payment.
   EXAM_DATE_AFTER_PAYMENT: Joi.number().integer().min(1).max(365).default(20),
 
+  // Transactional email (AWS SES v2). Off by default: MailerService logs instead
+  // of sending, so dev/staging never mails real candidates. When MAIL_ENABLED=true
+  // MAIL_FROM is required and must sit on an SES-verified domain.
+  MAIL_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  MAIL_FROM: Joi.string()
+    .email()
+    .when('MAIL_ENABLED', { is: 'true', then: Joi.required(), otherwise: Joi.optional() }),
+  MAIL_FROM_NAME: Joi.string().allow('').optional(),
+  MAIL_REPLY_TO: Joi.string().email().allow('').optional(),
+  MAIL_EXAM_DEADLINE_REMINDER_DAYS: Joi.number().integer().min(1).max(60).default(3),
+  MAIL_CERT_EXPIRY_REMINDER_DAYS: Joi.number().integer().min(1).max(180).default(30),
+
   // Optional: when set with ADMIN_PORTAL_URL, /public/site-context exposes footerAdminLink
   // only for requests whose IP matches (default 121.168.121.86). Edge must send X-Forwarded-For.
   ADMIN_FOOTER_ALLOWED_IP: Joi.string().optional(),
   ADMIN_PORTAL_URL: Joi.string().uri().allow('').optional(),
-
-  // Set to 'true' on staging/dev to expose POST /payment/test-confirm, which
-  // bypasses PortOne and marks the registration as PAID. Boot REFUSES 'true'
-  // when NODE_ENV=production — any logged-in user could otherwise mark their
-  // own registration PAID for free.
-  TEST_PAYMENT_ENABLED: Joi.string()
-    .valid('true', 'false')
-    .default('false')
-    // NOTE: must be .invalid() — a then:valid('false') would UNION with the
-    // base valid('true','false') and never restrict anything.
-    .when('NODE_ENV', {
-      is: 'production',
-      then: Joi.string().invalid('true').messages({
-        'any.invalid':
-          'TEST_PAYMENT_ENABLED must be false in production — it lets any user mark registrations PAID for free',
-      }),
-    }),
 
   // Set to 'true' on staging/dev to skip referenceFaceImage check at exam start.
   // Boot REFUSES 'true' when NODE_ENV=production.

@@ -17,9 +17,12 @@ import {
   RegistrationStatus,
   ScheduleStatus,
 } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma.service';
 import { RedisService } from '../../integrations/redis/redis.service';
+import { MailerService } from '../../integrations/mailer/mailer.service';
 import { NcObjectStorageService } from '../../integrations/ncObjectStorage/nc-object-storage.service';
+import { courseLabel } from '../../common/utils/course-label.util';
 import { isSeriesSuspended, MAX_ATTEMPTS } from '../cbtSessions/exam-spec';
 import {
   BONUS_ATTEMPTS_KEY,
@@ -76,6 +79,8 @@ export class RegistrationsService {
     private readonly schedules: SchedulesService,
     private readonly ncp: NcObjectStorageService,
     private readonly redis: RedisService,
+    private readonly mailer: MailerService,
+    private readonly config: ConfigService,
   ) {}
 
   // ─── L1 eligibility review ───────────────────────────────────────────────
@@ -492,8 +497,17 @@ export class RegistrationsService {
   /**
    * Pending-payment seat holds that passed `seatHeldUntil` are cancelled so
    * capacity frees and My Page no longer shows stale rows.
+   *
+   * Public because RegistrationExpiryService drives this on a cron. Historically
+   * it only ran lazily off three request paths (listMine / register / quickBook),
+   * so on a quiet schedule a lapsed hold could sit there indefinitely, holding a
+   * seat in `ExamSchedule.currentCount` that nobody could book.
+   *
+   * Returns the count released. Mails each affected candidate — the release is
+   * what tells them their reservation is gone, and MailerService dedupes on the
+   * registration id so the cron and the lazy paths cannot double-notify.
    */
-  private async releaseExpiredSeatHolds(): Promise<void> {
+  async releaseExpiredSeatHolds(): Promise<number> {
     const now = new Date();
     const holdCutoff = new Date(now.getTime() - SEAT_HOLD_MINUTES * 60_000);
     const stale = await this.prisma.registration.findMany({
@@ -501,12 +515,22 @@ export class RegistrationsService {
         status: RegistrationStatus.PENDING_PAYMENT,
         OR: [{ seatHeldUntil: { lt: now } }, { seatHeldUntil: null, createdAt: { lt: holdCutoff } }],
       },
-      select: { id: true, scheduleId: true },
+      select: {
+        id: true,
+        scheduleId: true,
+        userId: true,
+        certType: true,
+        level: true,
+        user: { select: { name: true, email: true } },
+        schedule: { select: { examDate: true } },
+      },
       take: 200,
     });
+
+    let released = 0;
     for (const row of stale) {
       try {
-        await this.prisma.$transaction(async (tx) => {
+        const didRelease = await this.prisma.$transaction(async (tx) => {
           const regUp = await tx.registration.updateMany({
             where: {
               id: row.id,
@@ -519,7 +543,7 @@ export class RegistrationsService {
               seatHeldUntil: null,
             },
           });
-          if (regUp.count === 0) return;
+          if (regUp.count === 0) return false;
           await tx.payment.updateMany({
             where: { registrationId: row.id, status: PaymentStatus.PENDING },
             data: { status: PaymentStatus.CANCELLED, cancelledAt: now },
@@ -528,11 +552,30 @@ export class RegistrationsService {
             where: { id: row.scheduleId },
             data: { currentCount: { decrement: 1 } },
           });
+          return true;
+        });
+
+        // Only mail on the transition we actually performed — `count === 0` means
+        // a concurrent caller (or the cron) already released it and already mailed.
+        if (!didRelease) continue;
+        released += 1;
+        void this.mailer.send({
+          userId: row.userId,
+          toEmail: row.user.email,
+          template: 'SEAT_HOLD_EXPIRED',
+          dedupeKey: `SEAT_HOLD_EXPIRED:${row.id}`,
+          vars: {
+            name: row.user.name,
+            course: courseLabel(row.certType, row.level),
+            scheduleDate: row.schedule.examDate,
+            url: `${this.config.get<string>('frontendUrl') ?? ''}/apply`,
+          },
         });
       } catch (err) {
         this.auditLogger.warn(`releaseExpiredSeatHolds: skip ${row.id} — ${String(err)}`);
       }
     }
+    return released;
   }
 
   async listMine(userId: string) {

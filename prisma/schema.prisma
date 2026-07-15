@@ -147,8 +147,57 @@ model User {
   inquiries           Inquiry[]
   demoProctoringEvents DemoProctoringEvent[]
   expertCompetencies  ExpertCompetency[]
+  emailLogs           EmailLog[]
 
   @@map("users")
+}
+
+/// One row per transactional email we intended to send. `dedupeKey` is the
+/// idempotency guard: the money path is reached by three independent triggers
+/// (browser confirm, PortOne webhook, 5-min reconcile cron) and the expiry crons
+/// re-scan the same rows every run, so without a UNIQUE key a candidate would be
+/// mailed the same receipt repeatedly. MailerService writes the row FIRST and
+/// only then calls SES — a duplicate insert throws P2002 and short-circuits the
+/// send. Also doubles as the delivery audit trail (admin support: "did they get it?").
+model EmailLog {
+  id         String          @id @default(cuid())
+  userId     String          @map("user_id")
+  toEmail    String          @map("to_email")
+  template   EmailTemplate
+  /// Stable natural key, e.g. `PAYMENT_SUCCESS:<registrationId>`. UNIQUE.
+  dedupeKey  String          @unique @map("dedupe_key")
+  status     EmailStatus     @default(PENDING)
+  /// SES MessageId on success; the failure reason on FAILED. Null while PENDING.
+  detail     String?         @db.Text
+  sentAt     DateTime?       @map("sent_at")
+  createdAt  DateTime        @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([template, status])
+  @@map("email_logs")
+}
+
+enum EmailTemplate {
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  SEAT_HOLD_EXPIRED
+  EXAM_DEADLINE_REMINDER
+  EXAM_DEADLINE_EXPIRED
+  CERT_EXPIRY_REMINDER
+  // Appended at the END so MySQL ENUM ordinals for existing email_logs rows are
+  // preserved (do NOT reorder). See prisma/migrations/manual-add-exam-result-released-email.sql.
+  // Neutral "results are available" notice sent when an expert confirms the
+  // decision (CONFIRMED_PASS / CONFIRMED_FAIL) — carries no score/pass-fail.
+  EXAM_RESULT_RELEASED
+}
+
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
 }
 
 model UserRole {

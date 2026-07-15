@@ -8,6 +8,8 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { RedisService } from '../../integrations/redis/redis.service';
+import { MailerService } from '../../integrations/mailer/mailer.service';
+import { courseLabel } from '../../common/utils/course-label.util';
 import { AdminNotificationsService } from '../adminNotifications/admin-notifications.service';
 import {
   getPortoneRemotePaymentId,
@@ -26,6 +28,7 @@ export class PaymentsService {
     private readonly config: ConfigService,
     private readonly redis: RedisService,
     private readonly adminNotifications: AdminNotificationsService,
+    private readonly mailer: MailerService,
   ) {}
 
   /**
@@ -122,7 +125,7 @@ export class PaymentsService {
           { orderId: input.pgPaymentId },
         ],
       },
-      include: { registration: { include: { schedule: true } } },
+      include: { registration: { include: { schedule: true, user: true } } },
     });
     if (!payment) {
       this.logger.warn(`PortOne paid: unknown merchantId=${input.merchantId}`);
@@ -180,8 +183,42 @@ export class PaymentsService {
     ]);
 
     this.logger.log(
-      `Payment confirmed: ${input.merchantId} registration=${payment.registrationId} (notify SMS/email stub)`,
+      `Payment confirmed: ${input.merchantId} registration=${payment.registrationId}`,
     );
+
+    // Receipt. Fire-and-forget (the `void this.loginAudit...` idiom used in
+    // AuthService): this runs inside the PortOne webhook request, and PortOne
+    // retries on timeout — blocking the 200 on an SES round-trip would risk a
+    // duplicate webhook. MailerService never throws and dedupes on registrationId,
+    // so the three triggers into this method still produce exactly one receipt.
+    //
+    // Guarded because the money is already committed by this point: everything
+    // below is best-effort, and no failure in it may surface as a failed payment.
+    // `user` is always populated by the include above — the guard is here so that
+    // a future refactor of that include degrades to "no receipt", not "500 on the
+    // webhook after taking the money".
+    const candidate = registration.user;
+    if (candidate) {
+      void this.mailer.send({
+        userId: registration.userId,
+        toEmail: candidate.email,
+        template: 'PAYMENT_SUCCESS',
+        dedupeKey: `PAYMENT_SUCCESS:${registration.id}`,
+        vars: {
+          name: candidate.name,
+          course: courseLabel(registration.certType, registration.level),
+          amount: payment.amount,
+          orderId: payment.orderId,
+          paidAt: approvedAt,
+          examDeadline,
+          url: `${this.config.get<string>('frontendUrl') ?? ''}/mypage`,
+        },
+      });
+    } else {
+      this.logger.error(
+        `Payment ${input.merchantId} confirmed but user relation missing — no receipt sent`,
+      );
+    }
   }
 
   async applyPortOneCancelled(merchantId: string): Promise<void> {
@@ -221,6 +258,7 @@ export class PaymentsService {
   async applyPortOneFailed(merchantId: string): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId: merchantId },
+      include: { registration: { include: { user: true } } },
     });
     if (!payment || payment.status !== PaymentStatus.PENDING) return;
 
@@ -229,6 +267,22 @@ export class PaymentsService {
       data: { status: PaymentStatus.CANCELLED, cancelledAt: new Date() },
     });
     this.logger.log(`PortOne payment failed → cancelled pending row: order=${merchantId}`);
+
+    const { registration } = payment;
+    if (!registration?.user) return; // best-effort — see applyPortOnePaid
+    void this.mailer.send({
+      userId: registration.userId,
+      toEmail: registration.user.email,
+      template: 'PAYMENT_FAILED',
+      dedupeKey: `PAYMENT_FAILED:${payment.id}`,
+      vars: {
+        name: registration.user.name,
+        course: courseLabel(registration.certType, registration.level),
+        amount: payment.amount,
+        orderId: payment.orderId,
+        url: `${this.config.get<string>('frontendUrl') ?? ''}/apply`,
+      },
+    });
   }
 
   private async alertCapacityExceeded(

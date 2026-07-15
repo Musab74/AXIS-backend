@@ -4,6 +4,7 @@ import { Request } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UsersService } from './users.service';
 import { UpdatePhoneDto } from './dto/update-phone.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
 @ApiTags('Users')
@@ -23,13 +24,10 @@ export class UsersController {
   @Patch('profile')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: '프로필 수정 (이메일 등)' })
-  async updateProfile(
-    @Req() req: Request,
-    @Body() body: { email?: string },
-  ) {
+  @ApiOperation({ summary: '프로필 수정 (이메일 등록/변경)' })
+  async updateProfile(@Req() req: Request, @Body() dto: UpdateProfileDto) {
     const user = req.user as { id: string };
-    return this.usersService.updateProfile(user.id, body);
+    return this.usersService.updateProfile(user.id, dto);
   }
 
   @Patch('profile/phone')

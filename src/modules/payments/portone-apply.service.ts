@@ -131,11 +131,6 @@ export type PortoneApplyConfirmResult =
       registrationId: string;
     };
 
-export type PortoneApplyTestConfirmResult = {
-  ok: true;
-  status: 'PAID';
-  registrationId: string;
-};
 
 function wrapRequestResult(
   base: Omit<PortoneApplyRequestBase, 'paymentId' | 'customer'> & {
@@ -271,6 +266,15 @@ export class PortoneApplyService {
     }
     if (registration.certType === 'AXIS_C' && registration.level === 'L1' && !registration.supportDocUrl) {
       throw new BadRequestException('MISSING_L1_DOCUMENT');
+    }
+    // The account email gate, enforced server-side. The wizard already collects an
+    // email at Step 3, but that is a client-side gate on a route a caller can skip.
+    // Taking money from a candidate we cannot send a receipt or an exam-deadline
+    // warning to is the failure this whole feature exists to prevent — so it is a
+    // hard precondition on the money path, not a UI nicety. The frontend maps this
+    // code onto the add-email dialog.
+    if (!registration.user.email) {
+      throw new BadRequestException('EMAIL_REQUIRED');
     }
 
     const fee = await this.resolveFee(registration.certType, registration.level);
@@ -467,62 +471,6 @@ export class PortoneApplyService {
       orderName,
       ...va,
     };
-  }
-
-  /**
-   * Demo/staging convenience: bypass PortOne entirely and flip the
-   * registration to PAID. Gated by TEST_PAYMENT_ENABLED — the controller
-   * throws NotFoundException when the flag is off so production never
-   * exposes the route. Re-uses the same Payment row created by
-   * `applyPaymentRequest`, so a real test-mode confirmation produces the
-   * same downstream side effects (Payment.status=CONFIRMED,
-   * Registration.status=PAID, examDeadline set) as a real PortOne PAID.
-   */
-  async applyPaymentTestConfirm(
-    userId: string,
-    registrationId: string,
-  ): Promise<PortoneApplyTestConfirmResult> {
-    const registration = await this.prisma.registration.findUnique({
-      where: { id: registrationId },
-    });
-    if (!registration) throw new NotFoundException('Registration not found');
-    if (registration.userId !== userId) {
-      throw new ForbiddenException('Not your registration');
-    }
-    if (registration.status === RegistrationStatus.PAID) {
-      return { ok: true, status: 'PAID', registrationId: registration.id };
-    }
-    if (registration.status !== RegistrationStatus.PENDING_PAYMENT) {
-      throw new ConflictException(`Registration is in status ${registration.status}`);
-    }
-
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        registrationId: registration.id,
-        status: PaymentStatus.PENDING,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!payment) {
-      throw new BadRequestException(
-        'No pending payment to confirm — call /payment/request first',
-      );
-    }
-
-    const syntheticPgId = `DEMO-${payment.orderId}-${Date.now()}`;
-    await this.payments.applyPortOnePaid({
-      merchantId: payment.orderId,
-      pgPaymentId: syntheticPgId,
-      rawResponse: {
-        demo: true,
-        confirmedBy: 'test-confirm',
-        confirmedAt: new Date().toISOString(),
-      } as Prisma.InputJsonValue,
-    });
-    this.logger.warn(
-      `TEST payment confirmed: registration=${registration.id} order=${payment.orderId} (TEST_PAYMENT_ENABLED)`,
-    );
-    return { ok: true, status: 'PAID', registrationId: registration.id };
   }
 
   /**

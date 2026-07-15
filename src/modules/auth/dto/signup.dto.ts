@@ -1,4 +1,13 @@
-import { IsString, MinLength, MaxLength, Matches, IsOptional, IsBoolean } from 'class-validator';
+import {
+  IsString,
+  MinLength,
+  MaxLength,
+  Matches,
+  IsOptional,
+  IsBoolean,
+  IsEmail,
+} from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class SignupDto {
@@ -34,13 +43,16 @@ export class SignupDto {
   niceSessionId!: string;
 
   @ApiProperty({
-    description: '이메일 (선택)',
+    description: '이메일 (필수 — 결제 영수증·응시 기한 안내 발송)',
     example: 'user@example.com',
-    required: false,
   })
-  @IsString()
-  @IsOptional()
-  email?: string;
+  // Required as of the account email gate: every candidate must be reachable for
+  // the payment receipt and the exam-deadline warning. Was @IsString() @IsOptional(),
+  // which also accepted `"asdf"` as an address.
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @MaxLength(190, { message: '이메일이 너무 깁니다' })
+  @IsEmail({}, { message: '이메일 형식이 올바르지 않습니다' })
+  email!: string;
 
   @ApiProperty({
     description: '개인정보 수집·이용 동의',

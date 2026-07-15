@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -57,15 +58,43 @@ export class UsersService {
       roles: user.roles.map((r) => r.role),
       createdAt: user.createdAt,
       lastLoginAt: user.lastLoginAt,
+      // Account email gate. Derived, not stored — an account either has an address
+      // or it does not, and a separate boolean column could only ever disagree with
+      // reality. Signup now requires an email, so this is only ever true for
+      // accounts created before the gate.
+      mustAddEmail: !user.email,
     };
   }
 
-  async updateProfile(userDbId: string, data: { email?: string }) {
+  /**
+   * Register or change the account email. This is the route the account email gate
+   * funnels every legacy null-email user through, so it is the one write path that
+   * has to be airtight.
+   *
+   * Pre-checks the duplicate rather than relying on the P2002 that the unique index
+   * would raise: PrismaExceptionFilter turns that into `이미 존재하는 데이터입니다 (email)`,
+   * which leaks the column name and does not match the wording signup already uses.
+   * The index is still the real guard — this check only buys the better message, and
+   * a concurrent insert between check and write still lands on the filter.
+   */
+  async updateProfile(userDbId: string, data: { email: string }) {
+    // The DTO has already trimmed + lowercased. Normalise again defensively: an
+    // empty string is NOT null to a MySQL unique index, so the second user to save
+    // one would collide with the first.
+    const email = data.email.trim().toLowerCase();
+    if (!email) throw new BadRequestException('이메일을 입력해주세요');
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    if (existing && existing.id !== userDbId) {
+      throw new ConflictException('이미 사용중인 이메일입니다');
+    }
+
     const user = await this.prisma.user.update({
       where: { id: userDbId },
-      data: {
-        email: data.email,
-      },
+      data: { email },
     });
 
     return {
@@ -73,6 +102,7 @@ export class UsersService {
       userId: user.userId,
       name: user.name,
       email: user.email,
+      mustAddEmail: false,
     };
   }
 

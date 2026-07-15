@@ -431,6 +431,10 @@ export class AuthService {
         email: user.email,
         roles,
         mustChangePassword: user.mustChangePassword,
+        // Account email gate: accounts created before email became mandatory have
+        // none, and we cannot send them a receipt or a deadline warning. The app
+        // blocks on this until they supply one. Derived, never stored.
+        mustAddEmail: !user.email,
       },
       ...tokens,
     };

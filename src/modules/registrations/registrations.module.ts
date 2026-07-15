@@ -9,6 +9,7 @@ import {
   RegistrationsController,
 } from './registrations.controller';
 import { RegistrationsService } from './registrations.service';
+import { RegistrationExpiryService } from './registration-expiry.service';
 
 @Module({
   imports: [
@@ -18,7 +19,7 @@ import { RegistrationsService } from './registrations.service';
     forwardRef(() => SchedulesModule),
   ],
   controllers: [RegistrationsController, AdminRegistrationsController],
-  providers: [RegistrationsService, PrismaService],
+  providers: [RegistrationsService, RegistrationExpiryService, PrismaService],
   exports: [RegistrationsService],
 })
 export class RegistrationsModule {}

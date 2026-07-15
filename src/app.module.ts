@@ -28,6 +28,7 @@ import { AdminQuestionsModule } from './modules/adminQuestions/admin-questions.m
 import { InquiriesModule } from './modules/inquiries/inquiries.module';
 import { ContentModule } from './modules/content/content.module';
 import { RedisModule } from './integrations/redis/redis.module';
+import { MailerModule } from './integrations/mailer/mailer.module';
 import { WebsocketModule } from './websocket/websocket.module';
 import { QueueModule } from './queue/queue.module';
 import { CertificatesModule } from './modules/certificates/certificates.module';
@@ -44,6 +45,7 @@ import { AdminNotificationsModule } from './modules/adminNotifications/admin-not
     }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
     RedisModule,
+    MailerModule,
     WebsocketModule,
     QueueModule,
     NiceAuthModule,

@@ -23,9 +23,16 @@ describe('PaymentsService.applyRemoteState — single money-path for webhook + c
     isReady: jest.fn(() => true),
   };
   const notifications = { notify: jest.fn(async () => null) };
+  const mailer = { send: jest.fn(async () => 'SENT' as const) };
 
   const svc = () =>
-    new PaymentsService(prisma as never, config, redis as never, notifications as never);
+    new PaymentsService(
+      prisma as never,
+      config,
+      redis as never,
+      notifications as never,
+      mailer as never,
+    );
 
   const remotePaid = (total = 100_000): PortonePaymentLike => ({
     id: 'imp_remote',
@@ -43,12 +50,16 @@ describe('PaymentsService.applyRemoteState — single money-path for webhook + c
     rawResponse: null,
     registration: {
       id: 'reg-1',
+      userId: 'user-1',
       status: RegistrationStatus.PENDING_PAYMENT,
       certType: 'AXIS',
       level: 'L3',
       supportDocUrl: null,
       eligibilityStatus: 'NOT_REQUIRED',
       schedule: { currentCount: 5, capacity: 10 },
+      // Mirrors the `include: { registration: { include: { schedule, user } } }`
+      // in applyPortOnePaid — the receipt is addressed from this relation.
+      user: { id: 'user-1', name: '홍길동', email: 'hong@example.com' },
     },
     ...over,
   });
@@ -77,6 +88,51 @@ describe('PaymentsService.applyRemoteState — single money-path for webhook + c
         data: expect.objectContaining({ status: RegistrationStatus.PAID }),
       }),
     );
+  });
+
+  it('PAID sends the receipt keyed on the registration — the dedupe key that makes it exactly-once', async () => {
+    prisma.payment.findFirst.mockResolvedValueOnce(pendingPayment());
+
+    await svc().applyRemoteState({ orderId: 'AXIS-r1-1', amount: 100_000 }, remotePaid());
+
+    expect(mailer.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: 'PAYMENT_SUCCESS',
+        toEmail: 'hong@example.com',
+        // All three triggers into the money path (browser confirm / webhook /
+        // reconcile cron) derive the SAME key, so the unique index on
+        // email_logs.dedupe_key collapses them to one receipt.
+        dedupeKey: 'PAYMENT_SUCCESS:reg-1',
+      }),
+    );
+  });
+
+  it('an already-CONFIRMED payment re-sends nothing — the webhook and the cron cannot double-mail', async () => {
+    prisma.payment.findFirst.mockResolvedValueOnce(
+      pendingPayment({ status: PaymentStatus.CONFIRMED }),
+    );
+
+    await svc().applyRemoteState({ orderId: 'AXIS-r1-1', amount: 100_000 }, remotePaid());
+
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+    expect(mailer.send).not.toHaveBeenCalled();
+  });
+
+  it('a payment confirmed over capacity does NOT mail a receipt — the seat was never granted', async () => {
+    prisma.payment.findFirst.mockResolvedValueOnce(
+      pendingPayment({
+        registration: {
+          ...pendingPayment().registration,
+          schedule: { currentCount: 11, capacity: 10 },
+        },
+      }),
+    );
+
+    await svc().applyRemoteState({ orderId: 'AXIS-r1-1', amount: 100_000 }, remotePaid());
+
+    // Money was taken but the registration stayed PENDING and admins were paged.
+    // Telling the candidate "you're all set" here would be a lie.
+    expect(mailer.send).not.toHaveBeenCalled();
   });
 
   it('PAID with a mismatched amount is SKIPPED — no state change', async () => {

@@ -3,11 +3,9 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
-  NotFoundException,
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -19,10 +17,7 @@ import { PortoneApplyService } from './portone-apply.service';
 @ApiTags('Payment (PortOne apply)')
 @Controller('payment')
 export class ApplyPaymentController {
-  constructor(
-    private readonly portoneApply: PortoneApplyService,
-    private readonly config: ConfigService,
-  ) {}
+  constructor(private readonly portoneApply: PortoneApplyService) {}
 
   @Post('request')
   @UseGuards(JwtAuthGuard)
@@ -44,24 +39,5 @@ export class ApplyPaymentController {
       paymentId: dto.paymentId,
       merchantId: dto.merchantId,
     });
-  }
-
-  // Demo/staging only. Returns 404 unless TEST_PAYMENT_ENABLED=true so prod
-  // never reveals the route — anyone with a JWT could otherwise mark any of
-  // their own registrations as PAID for free.
-  @Post('test-confirm')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Demo: mark registration PAID without PortOne (gated)' })
-  applyTestConfirm(
-    @CurrentUser('id') userId: string,
-    @Body() dto: PortoneApplyRequestDto,
-  ) {
-    if (!this.config.get<boolean>('testPayment.enabled')) {
-      throw new NotFoundException();
-    }
-    return this.portoneApply.applyPaymentTestConfirm(userId, dto.registrationId);
   }
 }

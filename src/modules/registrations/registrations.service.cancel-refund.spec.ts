@@ -106,12 +106,16 @@ function makeService() {
     set: jest.fn(async () => undefined),
     isReady: jest.fn(() => true),
   };
+  const mailer = { send: jest.fn(async () => 'SENT' as const) };
+  const config = { get: jest.fn(() => undefined) };
   const svc = new RegistrationsService(
     m.prisma,
     portone as unknown as PortoneGateway,
     schedules,
     ncp as never,
     redis as never,
+    mailer as never,
+    config as never,
   );
   return { svc, ...m, portone };
 }

@@ -102,17 +102,31 @@ export const envConfig = () => ({
     daysAfterPayment: parseInt(process.env.EXAM_DATE_AFTER_PAYMENT || '20', 10),
   },
 
+  // Transactional email (AWS SES v2, ap-northeast-2). Credentials come from the
+  // shared `aws` block above. MAIL_ENABLED=false (the default) makes MailerService
+  // log the rendered mail instead of sending it — every non-prod environment stays
+  // silent without needing SES credentials.
+  //
+  // SES SETUP (one-time, per environment):
+  //  1. Verify the axisexam.com domain in SES → publish the DKIM CNAMEs + an SPF
+  //     TXT record. Korean inboxes (Naver/Daum) hard-filter unauthenticated mail.
+  //  2. Request production access — a brand-new SES account is sandboxed and can
+  //     only send to pre-verified addresses. Approval takes ~24h.
+  //  3. MAIL_FROM must be on the verified domain or SES rejects the send.
+  mail: {
+    enabled: (process.env.MAIL_ENABLED || 'false').toLowerCase() === 'true',
+    from: process.env.MAIL_FROM || 'no-reply@axisexam.com',
+    fromName: process.env.MAIL_FROM_NAME || 'AXIS',
+    replyTo: (process.env.MAIL_REPLY_TO || '').trim(),
+    // Days before examDeadline / certificate valid_until to send the warning mail.
+    examDeadlineReminderDays: parseInt(process.env.MAIL_EXAM_DEADLINE_REMINDER_DAYS || '3', 10),
+    certExpiryReminderDays: parseInt(process.env.MAIL_CERT_EXPIRY_REMINDER_DAYS || '30', 10),
+  },
+
   /** Footer admin link: only returned from /public/site-context when client IP matches. */
   adminFooter: {
     allowedIp: (process.env.ADMIN_FOOTER_ALLOWED_IP || '121.168.121.86').trim(),
     portalUrl: (process.env.ADMIN_PORTAL_URL || '').trim(),
-  },
-
-  // Demo/staging convenience: POST /payment/test-confirm bypasses PortOne and
-  // flips the registration to PAID with a synthetic pgPaymentId. Endpoint
-  // returns 404 unless this is explicitly enabled — DO NOT enable in production.
-  testPayment: {
-    enabled: (process.env.TEST_PAYMENT_ENABLED || '').toLowerCase() === 'true',
   },
 
   cbt: {

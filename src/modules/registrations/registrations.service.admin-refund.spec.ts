@@ -136,12 +136,16 @@ function makeService() {
   const schedules = makeSchedulesMock();
   const ncp = { signedGetUrl: jest.fn(async () => 'https://signed') };
   const redis = { get: jest.fn(async () => null), incr: jest.fn(async () => 1), set: jest.fn(async () => undefined) };
+  const mailer = { send: jest.fn(async () => 'SENT' as const) };
+  const config = { get: jest.fn(() => undefined) };
   const svc = new RegistrationsService(
     m.prisma,
     portone as unknown as PortoneGateway,
     schedules,
     ncp as never,
     redis as never,
+    mailer as never,
+    config as never,
   );
   return { svc, ...m, portone };
 }
