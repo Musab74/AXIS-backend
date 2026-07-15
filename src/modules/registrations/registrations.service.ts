@@ -28,6 +28,7 @@ import {
   MAX_BONUS_ATTEMPTS,
 } from '../cbtSessions/registration-bonus-attempts';
 import { PORTONE_GATEWAY, PortoneGateway } from '../payments/portone-gateway.interface';
+import { isDemoPayment, isDemoPaymentKey } from '../payments/portone-payment.types';
 import { SchedulesService, parseVirtualSlotId } from '../schedules/schedules.service';
 import { AdminRefundDto } from './dto/admin-refund.dto';
 import { isPendingPaymentHoldExpired, SEAT_HOLD_MINUTES } from './seat-hold.util';
@@ -394,6 +395,11 @@ export class RegistrationsService {
     if (!confirmedPayment) {
       throw new BadRequestException('No confirmed payment to refund');
     }
+    if (isDemoPayment(confirmedPayment)) {
+      throw new BadRequestException(
+        'DEMO_PAYMENT — 테스트(데모) 결제는 환불할 수 없습니다. 실제 PG 결제가 아닙니다.',
+      );
+    }
 
     const refundAmount = confirmedPayment.amount;
     const reasonByStatus: Record<EligibilityStatus, string> = {
@@ -410,7 +416,7 @@ export class RegistrationsService {
       reasonByStatus[reg.eligibilityStatus] ??
       'AXIS-C L1 응시자격 — 100% 환불';
 
-    if (confirmedPayment.paymentKey) {
+    if (confirmedPayment.paymentKey && !isDemoPaymentKey(confirmedPayment.paymentKey)) {
       await this.portoneGateway.cancelPayment(
         confirmedPayment.paymentKey,
         reason,
@@ -608,6 +614,7 @@ export class RegistrationsService {
             status: r.payments[0].status,
             approvedAt: r.payments[0].approvedAt,
             refundAmount: r.payments[0].refundAmount,
+            isDemo: isDemoPayment(r.payments[0]),
           }
         : null,
         };
@@ -921,7 +928,11 @@ export class RegistrationsService {
       refundTier = 'NONE';
     }
 
-    if (refundAmount > 0 && confirmedPayment.paymentKey) {
+    if (
+      refundAmount > 0 &&
+      confirmedPayment.paymentKey &&
+      !isDemoPaymentKey(confirmedPayment.paymentKey)
+    ) {
       await this.portoneGateway.cancelPayment(
         confirmedPayment.paymentKey,
         reason,
@@ -1033,6 +1044,12 @@ export class RegistrationsService {
 
     const confirmedPayment = reg.payments.find((p) => p.status === 'CONFIRMED');
 
+    if (confirmedPayment && isDemoPayment(confirmedPayment)) {
+      throw new BadRequestException(
+        'DEMO_PAYMENT — 테스트(데모) 결제는 환불할 수 없습니다. 실제 PG 결제가 아닙니다.',
+      );
+    }
+
     if (!confirmedPayment) {
       // No confirmed payment to refund — just cancel the registration and free the seat.
       await this.prisma.$transaction([
@@ -1081,7 +1098,11 @@ export class RegistrationsService {
       }
     }
 
-    if (refundAmount > 0 && confirmedPayment.paymentKey) {
+    if (
+      refundAmount > 0 &&
+      confirmedPayment.paymentKey &&
+      !isDemoPaymentKey(confirmedPayment.paymentKey)
+    ) {
       const needsRefundAccount =
         confirmedPayment.method === PaymentMethod.VBANK ||
         confirmedPayment.method === PaymentMethod.TRANSFER;

@@ -165,6 +165,18 @@ describe('RegistrationsService.cancelWithRefund — session gate', () => {
     expect(portone.cancelPayment).toHaveBeenCalledTimes(1);
   });
 
+  it('skips PortOne cancel for DEMO- payment keys (test-confirm)', async () => {
+    const { svc, regFindUnique, sessionFindFirst, portone } = makeService();
+    const reg = makeRegistration({ examDateOffsetDays: 30, regEndOffsetDays: 20 });
+    reg.payments[0].paymentKey = 'DEMO-AXIS_xyz-1700000000000';
+    regFindUnique.mockResolvedValue(reg);
+    sessionFindFirst.mockResolvedValue(null);
+    const res = await svc.cancelWithRefund('user-1', 'reg-1');
+    expect(res.refundTier).toBe('FULL');
+    expect(res.refundAmount).toBe(100_000);
+    expect(portone.cancelPayment).not.toHaveBeenCalled();
+  });
+
   it('rejects with Forbidden when the caller is not the owner', async () => {
     const { svc, regFindUnique } = makeService();
     regFindUnique.mockResolvedValue(makeRegistration({ userId: 'other-user' }));

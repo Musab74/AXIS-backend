@@ -101,6 +101,7 @@ describe('PortoneApplyService', () => {
       expect(prisma.payment.create).not.toHaveBeenCalled();
       expect(result.merchantId).toBe('AXIS-reg-1-1');
       expect(result.alreadyIssued).toBe(false);
+      expect(result.testPaymentEnabled).toBe(false);
     });
 
     it('rewrites legacy orderIds longer than KCP V2 40-char limit', async () => {
@@ -386,6 +387,9 @@ describe('PortoneApplyService', () => {
         id: 'reg-1',
         userId: 'user-1',
         status: RegistrationStatus.PENDING_PAYMENT,
+        scheduleId: 'sched-1',
+        seatHeldUntil: new Date(Date.now() + 600_000),
+        schedule: {},
       });
       prisma.payment.findFirst.mockResolvedValueOnce(null);
       await expect(svc().applyPaymentTestConfirm('user-1', 'reg-1')).rejects.toBeInstanceOf(
@@ -398,6 +402,9 @@ describe('PortoneApplyService', () => {
         id: 'reg-1',
         userId: 'user-1',
         status: RegistrationStatus.PENDING_PAYMENT,
+        scheduleId: 'sched-1',
+        seatHeldUntil: new Date(Date.now() + 600_000),
+        schedule: {},
       });
       prisma.payment.findFirst.mockResolvedValueOnce({
         id: 'pay-1',
@@ -415,6 +422,23 @@ describe('PortoneApplyService', () => {
       expect(arg.rawResponse).toEqual(
         expect.objectContaining({ demo: true, confirmedBy: 'test-confirm' }),
       );
+    });
+
+    it('expires seat hold and throws SESSION_EXPIRED when the hold has lapsed', async () => {
+      prisma.registration.findUnique.mockResolvedValueOnce({
+        id: 'reg-1',
+        userId: 'user-1',
+        status: RegistrationStatus.PENDING_PAYMENT,
+        scheduleId: 'sched-1',
+        seatHeldUntil: new Date(Date.now() - 60_000),
+        schedule: {},
+      });
+
+      await expect(svc().applyPaymentTestConfirm('user-1', 'reg-1')).rejects.toMatchObject({
+        message: 'SESSION_EXPIRED',
+      });
+      expect(payments.applyPortOnePaid).not.toHaveBeenCalled();
+      expect(prisma.$transaction).toHaveBeenCalled();
     });
   });
 });

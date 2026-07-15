@@ -211,6 +211,7 @@ describe('RegistrationsService.adminRefund', () => {
       'tps_abc',
       expect.stringContaining('[ADMIN:admin-1]'),
       100_000,
+      undefined,
     );
     expect(paymentUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -228,6 +229,19 @@ describe('RegistrationsService.adminRefund', () => {
         data: expect.objectContaining({ status: RegistrationStatus.REFUNDED }),
       }),
     );
+  });
+
+  it('rejects DEMO- payment keys with BadRequest (no PortOne cancel)', async () => {
+    const { svc, regFindUnique, sessionFindFirst, portone } = makeService();
+    const reg = makeRegistration({ examDateOffsetDays: 30, regEndOffsetDays: 20 });
+    reg.payments[0].paymentKey = 'DEMO-AXIS_xyz-1700000000000';
+    regFindUnique.mockResolvedValue(reg);
+    sessionFindFirst.mockResolvedValue(null);
+
+    await expect(
+      svc.adminRefund('reg-1', { mode: 'FULL', reason: 'oops' }, ACTOR),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(portone.cancelPayment).not.toHaveBeenCalled();
   });
 
   it('TIERED mode applies the user-side policy (FULL when before reg-end)', async () => {

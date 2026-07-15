@@ -26,6 +26,7 @@ import { LoginAuditService } from '../auth/login-audit.service';
 import { MAX_ATTEMPTS } from '../cbtSessions/exam-spec';
 import { getBonusAttempts, MAX_BONUS_ATTEMPTS } from '../cbtSessions/registration-bonus-attempts';
 import { CertificatesService } from '../certificates/certificates.service';
+import { isDemoPayment } from '../payments/portone-payment.types';
 import { SearchUsersDto } from './dto/search-users.dto';
 import { SearchExamineesDto, ExamineeStatus } from './dto/search-examinees.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
@@ -891,8 +892,10 @@ export class AdminUsersService {
         const regSessions = (sessionsByReg.get(r.id) ?? []).map((s) =>
           this.toExamineeSession(s),
         );
+        const latestPayment = r.payments[0] ? this.toExamineePayment(r.payments[0]) : null;
         const refundable =
           r.status === RegistrationStatus.PAID &&
+          !latestPayment?.isDemo &&
           !regSessions.some((s) => isStartedSessionStatus(s.status));
         const attemptStats = await this.buildRegistrationAttemptStats(
           r.id,
@@ -910,7 +913,7 @@ export class AdminUsersService {
           createdAt: r.createdAt,
           examDeadline: r.examDeadline,
           schedule: this.toExamineeSchedule(r.schedule),
-          latestPayment: r.payments[0] ? this.toExamineePayment(r.payments[0]) : null,
+          latestPayment,
           sessions: regSessions,
           refundable,
           ...attemptStats,
@@ -1125,8 +1128,10 @@ export class AdminUsersService {
   ): ExamineeListRow {
     const certified = !!session && certifiedSessionIds.has(session.id);
     const examineeStatus = this.deriveExamineeStatus(r.status, session, certified);
+    const latestPayment = r.payments[0] ? this.toExamineePayment(r.payments[0]) : null;
     const refundable =
       r.status === RegistrationStatus.PAID &&
+      !latestPayment?.isDemo &&
       (!session || !isStartedSessionStatus(session.status));
     return {
       registrationId: r.id,
@@ -1141,7 +1146,7 @@ export class AdminUsersService {
         email: r.user.email,
       },
       schedule: this.toExamineeSchedule(r.schedule),
-      latestPayment: r.payments[0] ? this.toExamineePayment(r.payments[0]) : null,
+      latestPayment,
       session: session ? this.toExamineeSession(session) : null,
       examineeStatus,
       certified,
@@ -1175,6 +1180,7 @@ export class AdminUsersService {
       method: p.method,
       approvedAt: p.approvedAt,
       refundAmount: p.refundAmount,
+      isDemo: isDemoPayment(p),
     };
   }
 

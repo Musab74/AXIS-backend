@@ -125,6 +125,8 @@ export interface ExamineeListPayment {
   method: PaymentMethod | null;
   approvedAt: Date | null;
   refundAmount: number | null;
+  /** True when paid via TEST_PAYMENT /payment/test-confirm (no real PG money). */
+  isDemo: boolean;
 }
 
 export interface ExamineeListSession {

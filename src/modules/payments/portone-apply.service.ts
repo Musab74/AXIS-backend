@@ -103,6 +103,8 @@ type PortoneApplyRequestBase = {
   customerPhone: string;
   customer: { fullName: string; email: string; phoneNumber: string };
   registrationNumber: string | null;
+  /** True when POST /payment/test-confirm is live — Step 4 shows the demo pay method. */
+  testPaymentEnabled: boolean;
 };
 
 export type PortoneApplyRequestResult =
@@ -176,6 +178,10 @@ export class PortoneApplyService {
     return raw === 'v1' ? 'v1' : 'v2';
   }
 
+  private testPaymentEnabled(): boolean {
+    return this.config.get<boolean>('testPayment.enabled') === true;
+  }
+
   private assertPortoneChannelConfigured(): {
     portoneVersion: PortoneModuleVersion;
     storeId: string;
@@ -199,11 +205,24 @@ export class PortoneApplyService {
 
     if (portoneVersion === 'v1') {
       if (!impCode) {
+        // Staging with TEST_PAYMENT_ENABLED can still create PENDING rows for demo pay.
+        if (this.testPaymentEnabled()) {
+          return { portoneVersion, storeId, channelKey, impCode: 'demo', pgProvider };
+        }
         throw new BadRequestException('PortOne V1 imp_code is not configured (PORTONE_V1_IMP_CODE)');
       }
       return { portoneVersion, storeId, channelKey, impCode, pgProvider };
     }
     if (!storeId || !channelKey) {
+      if (this.testPaymentEnabled()) {
+        return {
+          portoneVersion,
+          storeId: storeId || 'demo-store',
+          channelKey: channelKey || 'demo-channel',
+          impCode: '',
+          pgProvider,
+        };
+      }
       throw new BadRequestException('PortOne store/channel is not configured');
     }
     return { portoneVersion, storeId, channelKey, impCode: '', pgProvider };
@@ -252,9 +271,14 @@ export class PortoneApplyService {
     return null;
   }
 
-  async applyPaymentRequest(userId: string, registrationId: string): Promise<PortoneApplyRequestResult> {
+  async applyPaymentRequest(
+    userId: string,
+    registrationId: string,
+    opts?: { payMethod?: 'CARD' | 'VBANK' },
+  ): Promise<PortoneApplyRequestResult> {
     const { portoneVersion, storeId, channelKey, impCode, pgProvider } =
       this.assertPortoneChannelConfigured();
+    const preferCard = opts?.payMethod === 'CARD';
 
     const registration = await this.prisma.registration.findUnique({
       where: { id: registrationId },
@@ -276,7 +300,7 @@ export class PortoneApplyService {
     const fee = await this.resolveFee(registration.certType, registration.level);
     const orderName = buildOrderNameKo(registration.certType, registration.level);
 
-    const existingPortone = await this.prisma.payment.findFirst({
+    let existingPortone = await this.prisma.payment.findFirst({
       where: {
         registrationId: registration.id,
         status: PaymentStatus.PENDING,
@@ -291,32 +315,50 @@ export class PortoneApplyService {
     };
 
     if (existingPortone?.paymentKey && existingPortone.rawResponse) {
-      const parsed = existingPortone.rawResponse as unknown as PortonePaymentLike;
-      try {
-        const va = extractVaFromPayment(parsed);
-        await this.redis.set(
-          `payment:orderId:${existingPortone.orderId}`,
-          registration.id,
-          ORDER_TTL_SECONDS,
-        );
-        return wrapRequestResult(
-          {
-            portoneVersion,
-            storeId,
-            channelKey,
-            impCode: impCode || undefined,
-            pgProvider: pgProvider || undefined,
-            merchantId: existingPortone.orderId,
-            orderName,
-            totalAmount: fee,
-            currency: 'KRW',
-            registrationNumber: registration.registrationNumber,
-            ...customerBase,
+      // CARD path cannot reuse a VA-issued PortOne paymentId — supersede and mint a new order.
+      if (preferCard) {
+        await this.prisma.payment.update({
+          where: { id: existingPortone.id },
+          data: {
+            status: PaymentStatus.CANCELLED,
+            cancelledAt: new Date(),
+            refundReason: 'Superseded by CARD payment attempt',
           },
-          { alreadyIssued: true, ...va },
+        });
+        await this.redis.del(`payment:orderId:${existingPortone.orderId}`);
+        this.logger.log(
+          `Superseded VA-issued pending payment ${existingPortone.orderId} for CARD request registration=${registration.id}`,
         );
-      } catch {
-        /* fall through to re-issue */
+        existingPortone = null;
+      } else {
+        const parsed = existingPortone.rawResponse as unknown as PortonePaymentLike;
+        try {
+          const va = extractVaFromPayment(parsed);
+          await this.redis.set(
+            `payment:orderId:${existingPortone.orderId}`,
+            registration.id,
+            ORDER_TTL_SECONDS,
+          );
+          return wrapRequestResult(
+            {
+              portoneVersion,
+              storeId,
+              channelKey,
+              impCode: impCode || undefined,
+              pgProvider: pgProvider || undefined,
+              merchantId: existingPortone.orderId,
+              orderName,
+              totalAmount: fee,
+              currency: 'KRW',
+              registrationNumber: registration.registrationNumber,
+              testPaymentEnabled: this.testPaymentEnabled(),
+              ...customerBase,
+            },
+            { alreadyIssued: true, ...va },
+          );
+        } catch {
+          /* fall through to re-issue */
+        }
       }
     }
 
@@ -363,6 +405,7 @@ export class PortoneApplyService {
         totalAmount: fee,
         currency: 'KRW',
         registrationNumber: registration.registrationNumber,
+        testPaymentEnabled: this.testPaymentEnabled(),
         ...customerBase,
       },
       { alreadyIssued: false },
@@ -484,6 +527,7 @@ export class PortoneApplyService {
   ): Promise<PortoneApplyTestConfirmResult> {
     const registration = await this.prisma.registration.findUnique({
       where: { id: registrationId },
+      include: { schedule: true },
     });
     if (!registration) throw new NotFoundException('Registration not found');
     if (registration.userId !== userId) {
@@ -494,6 +538,10 @@ export class PortoneApplyService {
     }
     if (registration.status !== RegistrationStatus.PENDING_PAYMENT) {
       throw new ConflictException(`Registration is in status ${registration.status}`);
+    }
+    if (isPendingPaymentHoldExpired(registration)) {
+      await this.expireSeatHold(registration.id, registration.scheduleId);
+      throw new ConflictException('SESSION_EXPIRED');
     }
 
     const payment = await this.prisma.payment.findFirst({
