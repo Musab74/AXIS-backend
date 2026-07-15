@@ -77,8 +77,8 @@ export class AdminQuestionsService {
 
   async getQuestions(filters: QuestionFilters) {
     const { questions } = this.loadFromFiles();
-    const page = filters.page ?? 1;
-    const limit = Math.min(filters.limit ?? 20, 100);
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(Math.max(1, filters.limit ?? 20), 100);
     const skip = (page - 1) * limit;
 
     const search = filters.search?.trim().toLowerCase();
@@ -134,8 +134,8 @@ export class AdminQuestionsService {
 
   async getTasks(filters: TaskFilters) {
     const { tasks } = this.loadFromFiles();
-    const page = filters.page ?? 1;
-    const limit = Math.min(filters.limit ?? 20, 100);
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(Math.max(1, filters.limit ?? 20), 100);
     const skip = (page - 1) * limit;
 
     const search = filters.search?.trim().toLowerCase();

@@ -32,6 +32,33 @@ function parseCertQuery(cert: string | undefined): CertType {
   throw new BadRequestException('cert must be one of AXIS, AXIS-C, AXIS-H');
 }
 
+/** Optional list filters — invalid values must 400, never reach Prisma (500). */
+function parseOptionalCertType(raw?: string): CertType | undefined {
+  if (raw == null || raw === '') return undefined;
+  const normalized = raw.trim().toUpperCase().replace('-', '_');
+  if (normalized === CertType.AXIS || normalized === CertType.AXIS_C || normalized === CertType.AXIS_H) {
+    return normalized as CertType;
+  }
+  throw new BadRequestException('certType must be one of AXIS, AXIS_C, AXIS_H');
+}
+
+function parseOptionalCertLevel(raw?: string): CertLevel | undefined {
+  if (raw == null || raw === '') return undefined;
+  const normalized = raw.trim().toUpperCase();
+  if (normalized === CertLevel.L1 || normalized === CertLevel.L2 || normalized === CertLevel.L3) {
+    return normalized as CertLevel;
+  }
+  throw new BadRequestException('level must be one of L1, L2, L3');
+}
+
+function parseOptionalScheduleStatus(raw?: string): ScheduleStatus | undefined {
+  if (raw == null || raw === '') return undefined;
+  const normalized = raw.trim().toUpperCase();
+  const allowed = Object.values(ScheduleStatus) as string[];
+  if (allowed.includes(normalized)) return normalized as ScheduleStatus;
+  throw new BadRequestException(`status must be one of ${allowed.join(', ')}`);
+}
+
 @ApiTags('Schedules')
 @Controller('schedules')
 export class SchedulesController {
@@ -41,15 +68,15 @@ export class SchedulesController {
   @Get()
   @ApiOperation({ summary: 'List exam schedules' })
   list(
-    @Query('certType') certType?: CertType,
-    @Query('level') level?: CertLevel,
-    @Query('status') status?: ScheduleStatus,
+    @Query('certType') certType?: string,
+    @Query('level') level?: string,
+    @Query('status') status?: string,
     @Query('upcomingOnly') upcomingOnly?: string,
   ) {
     return this.svc.list({
-      certType,
-      level,
-      status,
+      certType: parseOptionalCertType(certType),
+      level: parseOptionalCertLevel(level),
+      status: parseOptionalScheduleStatus(status),
       upcomingOnly: upcomingOnly === 'true' || upcomingOnly === '1',
     });
   }
@@ -58,25 +85,26 @@ export class SchedulesController {
   @Get('available')
   @ApiOperation({ summary: 'List open schedules with real-time remaining seats' })
   available(
-    @Query('certType') certType?: CertType,
-    @Query('level') level?: CertLevel,
+    @Query('certType') certType?: string,
+    @Query('level') level?: string,
   ) {
-    return this.svc.getAvailable(certType, level);
+    return this.svc.getAvailable(parseOptionalCertType(certType), parseOptionalCertLevel(level));
   }
 
   @Public()
   @Get('slots')
   @ApiOperation({ summary: 'On-demand time slots (L1/L2/L3) for a specific date' })
   slots(
-    @Query('certType') certType?: CertType,
+    @Query('certType') certType?: string,
     @Query('date') date?: string,
-    @Query('level') level?: CertLevel,
+    @Query('level') level?: string,
   ) {
-    if (!certType) throw new BadRequestException('certType is required');
+    const parsedCert = parseOptionalCertType(certType);
+    if (!parsedCert) throw new BadRequestException('certType is required');
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       throw new BadRequestException('date must be YYYY-MM-DD');
     }
-    return this.svc.getSlots(certType, date, level ?? CertLevel.L3);
+    return this.svc.getSlots(parsedCert, date, parseOptionalCertLevel(level) ?? CertLevel.L3);
   }
 
   @Public()
@@ -85,15 +113,15 @@ export class SchedulesController {
   calendar(
     @Query('year') year?: string,
     @Query('month') month?: string,
-    @Query('certType') certType?: CertType,
-    @Query('level') level?: CertLevel,
+    @Query('certType') certType?: string,
+    @Query('level') level?: string,
   ) {
     const y = year ? parseInt(year, 10) : new Date().getFullYear();
     const m = month ? parseInt(month, 10) : new Date().getMonth() + 1;
     if (isNaN(y) || isNaN(m) || m < 1 || m > 12) {
       throw new BadRequestException('Invalid year or month');
     }
-    return this.svc.getCalendar(y, m, certType, level);
+    return this.svc.getCalendar(y, m, parseOptionalCertType(certType), parseOptionalCertLevel(level));
   }
 
   @Public()

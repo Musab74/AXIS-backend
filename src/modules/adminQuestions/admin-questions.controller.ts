@@ -17,6 +17,24 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
 import { AdminQuestionsService, CsvUploadKind } from './admin-questions.service';
 
+function parsePositiveInt(raw: string | undefined, fallback: number, label: string): number {
+  if (raw == null || raw === '') return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    throw new BadRequestException(`${label} must be a positive integer`);
+  }
+  return n;
+}
+
+function parseOptionalNonNegInt(raw: string | undefined, label: string): number | undefined {
+  if (raw == null || raw === '') return undefined;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new BadRequestException(`${label} must be a non-negative integer`);
+  }
+  return n;
+}
+
 @Controller('admin/questions')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('SUPER_ADMIN', 'EXAM_ADMIN', 'GRADING_ADMIN')
@@ -45,10 +63,10 @@ export class AdminQuestionsController {
     return this.questionsService.getQuestions({
       certType,
       level,
-      subjectIndex: subjectIndex ? parseInt(subjectIndex, 10) : undefined,
+      subjectIndex: parseOptionalNonNegInt(subjectIndex, 'subjectIndex'),
       search,
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 20,
+      page: parsePositiveInt(page, 1, 'page'),
+      limit: parsePositiveInt(limit, 20, 'limit'),
     });
   }
 
@@ -104,8 +122,8 @@ export class AdminTasksController {
       level,
       part,
       search,
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 20,
+      page: parsePositiveInt(page, 1, 'page'),
+      limit: parsePositiveInt(limit, 20, 'limit'),
     });
   }
 
