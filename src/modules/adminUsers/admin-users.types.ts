@@ -87,11 +87,18 @@ export interface UserDetail extends UserSummary {
   examSessions: ExamSessionSummary[];
 }
 
+export interface SearchUsersCounts {
+  active: number;
+  suspended: number;
+  withPenalty: number;
+}
+
 export interface SearchUsersResult {
   items: UserSummary[];
   total: number;
   page: number;
   limit: number;
+  counts: SearchUsersCounts;
 }
 
 export type IssuedPenalty = UserPenalty;

@@ -48,6 +48,17 @@ export class AdminUsersController {
     return this.adminUsersService.searchUsers(dto);
   }
 
+  @Get('export')
+  @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
+  @ApiOperation({ summary: '관리자: 회원 목록 Excel 다운로드' })
+  async exportUsers(@Query() dto: SearchUsersDto, @Res() res: Response): Promise<void> {
+    const file = await this.adminUsersService.exportUsers(dto);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    res.setHeader('Content-Length', file.buffer.length);
+    res.end(file.buffer);
+  }
+
   @Get('experts')
   @Roles('SUPER_ADMIN', 'EXAM_ADMIN', 'GRADING_ADMIN')
   @ApiOperation({ summary: '관리자: 채점위원(EXPERT) 목록' })

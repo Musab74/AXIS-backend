@@ -165,8 +165,10 @@ export class AdminUsersService {
     const page = dto.page ?? 1;
     const limit = dto.limit ?? 20;
     const where = this.buildSearchWhere(dto);
+    // KPI breakdown respects q/role but ignores accountStatus so cards stay meaningful while filtering.
+    const kpiBase = this.buildSearchWhere({ ...dto, accountStatus: undefined });
 
-    const [rows, total] = await this.prisma.$transaction([
+    const [rows, total, active, suspended, withPenalty] = await this.prisma.$transaction([
       this.prisma.user.findMany({
         where,
         include: {
@@ -178,6 +180,18 @@ export class AdminUsersService {
         take: limit,
       }),
       this.prisma.user.count({ where }),
+      this.prisma.user.count({
+        where: { ...kpiBase, accountStatus: AccountStatus.ACTIVE },
+      }),
+      this.prisma.user.count({
+        where: { ...kpiBase, accountStatus: AccountStatus.SUSPENDED },
+      }),
+      this.prisma.user.count({
+        where: {
+          ...kpiBase,
+          penalties: { some: { status: PenaltyStatus.ACTIVE } },
+        },
+      }),
     ]);
 
     return {
@@ -185,6 +199,73 @@ export class AdminUsersService {
       total,
       page,
       limit,
+      counts: { active, suspended, withPenalty },
+    };
+  }
+
+  /**
+   * Excel export of the filtered member list (same filters as searchUsers,
+   * up to {@link EXPORT_FETCH_CAP} rows).
+   */
+  async exportUsers(dto: SearchUsersDto): Promise<ExamineeExportFile> {
+    const where = this.buildSearchWhere(dto);
+    const rows = await this.prisma.user.findMany({
+      where,
+      include: {
+        roles: { where: { revokedAt: null } },
+        penalties: { where: { status: PenaltyStatus.ACTIVE } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: EXPORT_FETCH_CAP,
+      skip: 0,
+    });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Members');
+    ws.columns = [
+      { header: '회원ID', key: 'userId', width: 18 },
+      { header: '이름', key: 'name', width: 22 },
+      { header: '이메일', key: 'email', width: 28 },
+      { header: '전화번호', key: 'phone', width: 14 },
+      { header: '계정상태', key: 'status', width: 12 },
+      { header: '본인인증', key: 'nice', width: 10 },
+      { header: '역할', key: 'roles', width: 28 },
+      { header: '활성제재', key: 'penalties', width: 10 },
+      { header: '가입일', key: 'joined', width: 14 },
+      { header: '최근로그인', key: 'lastLogin', width: 18 },
+    ];
+    const header = ws.getRow(1);
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1E293B' },
+    };
+
+    for (const u of rows) {
+      ws.addRow({
+        userId: u.userId,
+        name: u.name,
+        email: u.email ?? '—',
+        phone: maskPhone(u.phone),
+        status: u.accountStatus,
+        nice: u.niceVerified ? 'Y' : 'N',
+        roles: u.roles.map((r) => r.role).join(', '),
+        penalties: u.penalties.length,
+        joined: this.fmtExportDate(u.createdAt),
+        lastLogin: u.lastLoginAt ? this.fmtExportDateTime(u.lastLoginAt) : '—',
+      });
+    }
+    ws.addRow([]);
+    const foot = ws.addRow([`총 ${rows.length}건`]);
+    foot.font = { italic: true, color: { argb: 'FF64748B' } };
+
+    const data = await wb.xlsx.writeBuffer();
+    const stamp = new Date().toISOString().slice(0, 10);
+    return {
+      buffer: Buffer.from(data),
+      fileName: `members_${stamp}.xlsx`,
+      contentType: XLSX_MIME,
     };
   }
 
@@ -1012,6 +1093,12 @@ export class AdminUsersService {
     const d = typeof iso === 'string' ? new Date(iso) : iso;
     if (Number.isNaN(d.getTime())) return '—';
     return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  private fmtExportDateTime(iso: string | Date): string {
+    const d = typeof iso === 'string' ? new Date(iso) : iso;
+    if (Number.isNaN(d.getTime())) return '—';
+    return `${this.fmtExportDate(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
 
   async getExamineeDetail(userId: string): Promise<ExamineeDetail> {
