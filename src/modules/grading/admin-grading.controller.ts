@@ -7,11 +7,9 @@ import {
   Patch,
   Post,
   Query,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -73,18 +71,16 @@ export class AdminGradingController {
    */
   @Get('sessions/:id/deliverable')
   @Roles('SUPER_ADMIN', 'GRADING_ADMIN', 'EXAM_ADMIN')
-  @ApiOperation({ summary: 'Redirect to signed deliverable URL (admins only)' })
+  @ApiOperation({ summary: 'Signed deliverable URL (admins only)' })
   async deliverable(
     @Param('id') sessionId: string,
     @Query('taskId') taskId: string,
-    @Res() res: Response,
-  ) {
+  ): Promise<{ url: string }> {
     if (!taskId?.trim()) {
-      res.status(400).json({ message: 'taskId query parameter is required' });
-      return;
+      throw new BadRequestException('taskId query parameter is required');
     }
     const url = await this.svc.getDeliverableDownloadUrl(sessionId, taskId.trim());
-    res.redirect(302, url);
+    return { url };
   }
 
   @Post('sessions/:id/assign')
@@ -198,6 +194,27 @@ export class AdminGradingController {
     @Body() body: { fieldKey: string },
   ) {
     return this.svc.confirmGateZero(actor.id, actor.roles, sessionId, taskId, body.fieldKey);
+  }
+
+  /**
+   * Expert/admin pass-fail decision on a force-terminated (cheating/unfinished)
+   * exam. The saved answers + proctoring evidence stay intact; the reviewer
+   * confirms (pass) or rejects (fail) the result. Certificate issued on pass.
+   */
+  @Post('sessions/:id/review-terminated')
+  @ApiOperation({ summary: 'Confirm (pass) or reject (fail) a force-terminated exam' })
+  reviewTerminated(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') sessionId: string,
+    @Body() body: { decision: 'pass' | 'fail'; note?: string },
+  ) {
+    return this.svc.reviewTerminatedSession(
+      actor.id,
+      actor.roles,
+      sessionId,
+      body.decision,
+      body.note,
+    );
   }
 
   /** v2.0 terminal state: invalidate a session decision (부정행위 등). Admin only. */

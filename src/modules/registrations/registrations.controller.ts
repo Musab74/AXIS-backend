@@ -215,8 +215,14 @@ export class AdminRegistrationsController {
   @Get('eligibility')
   @Roles('SUPER_ADMIN', 'EXAM_ADMIN', 'GRADING_ADMIN', 'EXPERT')
   @ApiOperation({ summary: 'L1 eligibility review queue' })
-  eligibilityQueue(@Query('status') status?: 'PENDING' | 'APPROVED' | 'REJECTED') {
-    return this.svc.listEligibilityQueue(status);
+  eligibilityQueue(@Query('status') status?: string) {
+    const allowed = ['PENDING', 'APPROVED', 'REJECTED'] as const;
+    if (status != null && status !== '' && !(allowed as readonly string[]).includes(status)) {
+      throw new BadRequestException(`Invalid eligibility status. Allowed: ${allowed.join(', ')}`);
+    }
+    return this.svc.listEligibilityQueue(
+      status ? (status as 'PENDING' | 'APPROVED' | 'REJECTED') : undefined,
+    );
   }
 
   @Get('eligibility/counts')
