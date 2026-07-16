@@ -16,6 +16,7 @@ import {
   Role,
   UserPenalty,
 } from '@prisma/client';
+import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import ExcelJS from 'exceljs';
 import { PrismaService } from '../../common/prisma.service';
@@ -476,10 +477,21 @@ export class AdminUsersService {
   // ─── Password reset (admin-forced) ───────────────────────────────────────
 
   /**
-   * Fixed temp password assigned by an admin reset. The account is flagged
-   * with `mustChangePassword` so the portal forces a change on next login.
+   * One-time temp password for an admin reset. Returned once to the operator;
+   * the account is flagged `mustChangePassword` so the portal forces a change
+   * on next login. Never reuse a fixed string.
    */
-  static readonly TEMP_PASSWORD = 'aa123';
+  static generateTempPassword(): string {
+    // 12 chars from an unambiguous alphabet (no 0/O/1/l/I). Enough entropy for
+    // a short-lived reset; the user must replace it immediately.
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    const bytes = randomBytes(12);
+    let out = '';
+    for (let i = 0; i < 12; i++) {
+      out += alphabet[bytes[i]! % alphabet.length];
+    }
+    return out;
+  }
 
   async resetPassword(
     actorUser: AuthenticatedUser,
@@ -494,7 +506,8 @@ export class AdminUsersService {
       throw new NotFoundException('사용자를 찾을 수 없습니다');
     }
 
-    const passwordHash = await bcrypt.hash(AdminUsersService.TEMP_PASSWORD, 12);
+    const tempPassword = AdminUsersService.generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 12);
     await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: targetId },
@@ -522,7 +535,7 @@ export class AdminUsersService {
       ip,
     });
 
-    return { ok: true, tempPassword: AdminUsersService.TEMP_PASSWORD };
+    return { ok: true, tempPassword };
   }
 
   // ─── Audited PII reveal ──────────────────────────────────────────────────
@@ -968,7 +981,7 @@ export class AdminUsersService {
         reg: r.registrationNumber ?? '—',
         name: r.user.name,
         email: r.user.email ?? '—',
-        phone: r.user.phone ?? '—',
+        phone: maskPhone(r.user.phone) || '—',
         cert:
           r.schedule.certType === 'AXIS_C'
             ? 'AXIS-C'

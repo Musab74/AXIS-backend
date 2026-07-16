@@ -1,8 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import {
-  ExamSessionStatus,
-  ProctorEventType,
-} from '@prisma/client';
+import { ExamSessionStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { RedisService } from '../../integrations/redis/redis.service';
 import { MonitorHeartbeatService } from './monitor-heartbeat.service';
@@ -202,25 +199,10 @@ export class AdminMonitorService {
 
   async summary(): Promise<LiveSummary> {
     const now = Date.now();
-    const [active, warningCount] = await Promise.all([
-      this.prisma.examSession.findMany({
-        where: { status: ExamSessionStatus.IN_PROGRESS },
-        select: { id: true, certType: true, level: true, proctorWarnings: true },
-      }),
-      this.prisma.proctoringEvent.count({
-        where: {
-          createdAt: { gte: new Date(now - 60 * 60 * 1000) },
-          eventType: {
-            in: [
-              ProctorEventType.AI_FLAG_CONFIRMED,
-              ProctorEventType.AI_FLAG_SUSPICIOUS,
-              ProctorEventType.MULTIPLE_FACES,
-              ProctorEventType.PHONE_DETECTED,
-            ],
-          },
-        },
-      }),
-    ]);
+    const active = await this.prisma.examSession.findMany({
+      where: { status: ExamSessionStatus.IN_PROGRESS },
+      select: { id: true, certType: true, level: true, proctorWarnings: true },
+    });
     // Only count candidates who have actually pinged within the live window —
     // otherwise the "1 takers" badge in the header stays lit for hours after
     // someone closes their laptop mid-exam. When Redis is down we can't read
@@ -239,11 +221,14 @@ export class AdminMonitorService {
       return { inProgress: false, examName: null, takers: 0, warnings: 0 };
     }
     const first = liveSessions[0];
+    // Match the live roster: sum session.proctorWarnings for currently live
+    // takers (not a separate hourly AI-event count that diverged from the list).
+    const warnings = liveSessions.reduce((sum, s) => sum + (s.proctorWarnings ?? 0), 0);
     return {
       inProgress: true,
       examName: `${this.certLabel(first.certType)} ${first.level}`,
       takers: liveSessions.length,
-      warnings: warningCount,
+      warnings,
     };
   }
 
