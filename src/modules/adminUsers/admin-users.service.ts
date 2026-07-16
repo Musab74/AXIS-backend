@@ -17,6 +17,7 @@ import {
   UserPenalty,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import ExcelJS from 'exceljs';
 import { PrismaService } from '../../common/prisma.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-user';
 import { maskBirthDate, maskPhone } from '../../common/utils/pii-mask.util';
@@ -28,7 +29,11 @@ import { getBonusAttempts, MAX_BONUS_ATTEMPTS } from '../cbtSessions/registratio
 import { CertificatesService } from '../certificates/certificates.service';
 import { isDemoPayment } from '../payments/portone-payment.types';
 import { SearchUsersDto } from './dto/search-users.dto';
-import { SearchExamineesDto, ExamineeStatus } from './dto/search-examinees.dto';
+import {
+  SearchExamineesDto,
+  ExamineeStatus,
+  PaymentStatusFilter,
+} from './dto/search-examinees.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { IssuePenaltyDto } from './dto/issue-penalty.dto';
 import { CreateExpertDto } from './dto/create-expert.dto';
@@ -42,6 +47,7 @@ import {
   ExamineeListSchedule,
   ExamineeListSession,
   ExamineeListResult,
+  ExamineeListCounts,
   ExamineeRegistrationDetail,
   IssuedPenalty,
   MemberProfile,
@@ -57,6 +63,12 @@ import {
   UserRoleSummary,
   UserSummary,
 } from './admin-users.types';
+
+export interface ExamineeExportFile {
+  buffer: Buffer;
+  fileName: string;
+  contentType: string;
+}
 
 // Local audit-action enum. The Prisma `AuditAction` enum / `AdminAuditLog`
 // model were removed from the schema, so we record audit events to the Nest
@@ -98,6 +110,13 @@ const REGISTRATION_DRIVEN_STATUSES: ReadonlyMap<
   ['REFUNDED', [RegistrationStatus.REFUNDED]],
 ]);
 
+/** Payment filters for the registrations screen → registration.status groups. */
+const PAYMENT_STATUS_TO_REG: ReadonlyMap<PaymentStatusFilter, RegistrationStatus[]> = new Map([
+  ['PENDING', [RegistrationStatus.PENDING_PAYMENT]],
+  ['CONFIRMED', [RegistrationStatus.PAID, RegistrationStatus.EXAM_COMPLETED]],
+  ['REFUNDED', [RegistrationStatus.REFUNDED]],
+]);
+
 /**
  * Statuses that are visible in the Examinees screen by default. We exclude
  * raw cancelled/refunded only when the admin asks for them via the filter.
@@ -113,6 +132,12 @@ const DEFAULT_REGISTRATION_STATUSES: RegistrationStatus[] = [
 
 /** Pre-filter window when status requires a session/cert-level post-filter. */
 const POST_FILTER_FETCH_CAP = 1_000;
+
+/** Hard cap for Excel export rows. */
+const EXPORT_FETCH_CAP = 5_000;
+
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /** True iff the candidate has started or finished the exam (used by refund gating). */
 function isStartedSessionStatus(s: ExamSessionStatus): boolean {
@@ -749,15 +774,12 @@ export class AdminUsersService {
   // ─── Examinee management ─────────────────────────────────────────────────
 
   /**
-   * List one row per registration with the linked exam session, latest
-   * payment, and certificate flag merged in. Filters by examinee status,
-   * cert/level, and a free-text user search (name OR phone, contains).
+   * Admin examinee/registration list.
    *
-   * Implementation notes:
-   * - Registration-driven statuses (NOT_STARTED / PENDING_PAYMENT / CANCELLED
-   *   / REFUNDED) are filtered at the DB.
-   * - Session/cert-driven statuses (IN_PROGRESS / SUBMITTED / TERMINATED /
-   *   GRADED_PASSED / GRADED_FAILED / CERTIFIED) are post-filtered in JS
+   * Status filtering:
+   * - registration-driven (PENDING_PAYMENT / CANCELLED / REFUNDED / NOT_STARTED→PAID)
+   *   and paymentStatus (PENDING / CONFIRMED / REFUNDED) paginate at the DB
+   * - session/cert-driven (IN_PROGRESS / SUBMITTED / …) are post-filtered in JS
    *   because `ExamSession.registrationId` is a plain column without a
    *   Prisma relation arrow on the Registration side. We bound the candidate
    *   fetch at {@link POST_FILTER_FETCH_CAP} rows to keep memory predictable.
@@ -766,26 +788,13 @@ export class AdminUsersService {
     const page = dto.page ?? 1;
     const limit = dto.limit ?? 20;
     const wantedStatus = dto.status;
+    const paymentStatus = dto.paymentStatus;
     const isPostFilterStatus =
-      !!wantedStatus && !REGISTRATION_DRIVEN_STATUSES.has(wantedStatus);
+      !paymentStatus && !!wantedStatus && !REGISTRATION_DRIVEN_STATUSES.has(wantedStatus);
 
-    const where: Prisma.RegistrationWhereInput = {};
-    if (dto.certType) where.certType = dto.certType;
-    if (dto.level) where.level = dto.level;
-    if (dto.q && dto.q.trim().length > 0) {
-      const q = dto.q.trim();
-      where.user = { OR: [{ name: { contains: q } }, { phone: { contains: q } }] };
-    }
-    // Restrict to "real" registrations the admin should see.
-    if (wantedStatus && REGISTRATION_DRIVEN_STATUSES.has(wantedStatus)) {
-      where.status = { in: REGISTRATION_DRIVEN_STATUSES.get(wantedStatus) };
-    } else {
-      where.status = { in: DEFAULT_REGISTRATION_STATUSES };
-    }
+    const where = this.buildExamineeWhere(dto);
+    const counts = await this.countExamineeKpis(dto);
 
-    // For registration-driven statuses we can paginate at the DB. For
-    // session/cert-driven ones we fetch a wider candidate window and
-    // paginate in code after the post-filter.
     const fetchTake = isPostFilterStatus ? POST_FILTER_FETCH_CAP : limit;
     const fetchSkip = isPostFilterStatus ? 0 : (page - 1) * limit;
 
@@ -805,48 +814,204 @@ export class AdminUsersService {
     ]);
 
     if (rows.length === 0) {
-      return { items: [], total: totalAtDb, page, limit };
+      return { items: [], total: totalAtDb, page, limit, counts };
     }
 
-    // Pull every session that belongs to one of these registrations in one
-    // query, then index by registrationId.
-    const regIds = rows.map((r) => r.id);
-    const sessions = await this.prisma.examSession.findMany({
-      where: { registrationId: { in: regIds } },
-      orderBy: [{ attemptNo: 'desc' }, { createdAt: 'desc' }],
+    const mapped = await this.mapRegistrationRows(rows);
+
+    if (isPostFilterStatus && wantedStatus) {
+      const filtered = mapped.filter((row) => row.examineeStatus === wantedStatus);
+      const total = filtered.length;
+      const start = (page - 1) * limit;
+      const items = filtered.slice(start, start + limit);
+      return { items, total, page, limit, counts };
+    }
+
+    return { items: mapped, total: totalAtDb, page, limit, counts };
+  }
+
+  /**
+   * Excel export of the filtered examinee/registration list (same filters as
+   * list, up to {@link EXPORT_FETCH_CAP} rows).
+   */
+  async exportExaminees(dto: SearchExamineesDto): Promise<ExamineeExportFile> {
+    const where = this.buildExamineeWhere(dto);
+    const isPostFilterStatus =
+      !dto.paymentStatus && !!dto.status && !REGISTRATION_DRIVEN_STATUSES.has(dto.status);
+
+    const rows = await this.prisma.registration.findMany({
+      where,
+      include: {
+        user: { select: { id: true, userId: true, name: true, phone: true, email: true } },
+        schedule: true,
+        payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+      take: EXPORT_FETCH_CAP,
+      skip: 0,
     });
+
+    let mapped = await this.mapRegistrationRows(rows);
+    if (isPostFilterStatus && dto.status) {
+      mapped = mapped.filter((row) => row.examineeStatus === dto.status);
+    }
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Registrations');
+    ws.columns = [
+      { header: '접수번호', key: 'reg', width: 24 },
+      { header: '이름', key: 'name', width: 20 },
+      { header: '이메일', key: 'email', width: 28 },
+      { header: '전화번호', key: 'phone', width: 14 },
+      { header: '자격', key: 'cert', width: 10 },
+      { header: '등급', key: 'level', width: 8 },
+      { header: '회차', key: 'round', width: 10 },
+      { header: '접수일', key: 'regDate', width: 14 },
+      { header: '결제금액', key: 'amount', width: 12 },
+      { header: '결제방법', key: 'method', width: 12 },
+      { header: '결제상태', key: 'payStatus', width: 14 },
+      { header: '접수상태', key: 'regStatus', width: 16 },
+      { header: '데모', key: 'demo', width: 8 },
+    ];
+    const header = ws.getRow(1);
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1E293B' },
+    };
+
+    for (const r of mapped) {
+      const pay = r.latestPayment;
+      ws.addRow({
+        reg: r.registrationNumber ?? '—',
+        name: r.user.name,
+        email: r.user.email ?? '—',
+        phone: r.user.phone ?? '—',
+        cert:
+          r.schedule.certType === 'AXIS_C'
+            ? 'AXIS-C'
+            : r.schedule.certType === 'AXIS_H'
+              ? 'AXIS-H'
+              : 'AXIS',
+        level: r.schedule.level,
+        round: r.schedule.roundNumber,
+        regDate: this.fmtExportDate(r.registrationCreatedAt),
+        amount: pay?.amount ?? '',
+        method: pay?.method ?? '—',
+        payStatus: pay?.status ?? '—',
+        regStatus: r.registrationStatus,
+        demo: pay?.isDemo ? 'Y' : '',
+      });
+    }
+    ws.addRow([]);
+    const foot = ws.addRow([`총 ${mapped.length}건`]);
+    foot.font = { italic: true, color: { argb: 'FF64748B' } };
+
+    const data = await wb.xlsx.writeBuffer();
+    const stamp = new Date().toISOString().slice(0, 10);
+    return {
+      buffer: Buffer.from(data),
+      fileName: `registrations_${stamp}.xlsx`,
+      contentType: XLSX_MIME,
+    };
+  }
+
+  private buildExamineeWhere(dto: SearchExamineesDto): Prisma.RegistrationWhereInput {
+    const where: Prisma.RegistrationWhereInput = {};
+    if (dto.certType) where.certType = dto.certType;
+    if (dto.level) where.level = dto.level;
+    if (dto.q && dto.q.trim().length > 0) {
+      const q = dto.q.trim();
+      where.OR = [
+        { user: { name: { contains: q } } },
+        { user: { phone: { contains: q } } },
+        { user: { email: { contains: q } } },
+        { registrationNumber: { contains: q } },
+      ];
+    }
+
+    if (dto.paymentStatus && PAYMENT_STATUS_TO_REG.has(dto.paymentStatus)) {
+      where.status = { in: PAYMENT_STATUS_TO_REG.get(dto.paymentStatus) };
+    } else if (dto.status && REGISTRATION_DRIVEN_STATUSES.has(dto.status)) {
+      where.status = { in: REGISTRATION_DRIVEN_STATUSES.get(dto.status) };
+    } else {
+      where.status = { in: DEFAULT_REGISTRATION_STATUSES };
+    }
+    return where;
+  }
+
+  /** KPI counts scoped to q/cert/level only (ignore status / paymentStatus). */
+  private async countExamineeKpis(dto: SearchExamineesDto): Promise<ExamineeListCounts> {
+    const base: Prisma.RegistrationWhereInput = {};
+    if (dto.certType) base.certType = dto.certType;
+    if (dto.level) base.level = dto.level;
+    if (dto.q && dto.q.trim().length > 0) {
+      const q = dto.q.trim();
+      base.OR = [
+        { user: { name: { contains: q } } },
+        { user: { phone: { contains: q } } },
+        { user: { email: { contains: q } } },
+        { registrationNumber: { contains: q } },
+      ];
+    }
+
+    const [pending, paid, refunded] = await this.prisma.$transaction([
+      this.prisma.registration.count({
+        where: { ...base, status: RegistrationStatus.PENDING_PAYMENT },
+      }),
+      this.prisma.registration.count({
+        where: {
+          ...base,
+          status: { in: [RegistrationStatus.PAID, RegistrationStatus.EXAM_COMPLETED] },
+        },
+      }),
+      this.prisma.registration.count({
+        where: { ...base, status: RegistrationStatus.REFUNDED },
+      }),
+    ]);
+    return { pending, paid, refunded };
+  }
+
+  private async mapRegistrationRows(
+    rows: Prisma.RegistrationGetPayload<{
+      include: {
+        user: { select: { id: true; userId: true; name: true; phone: true; email: true } };
+        schedule: true;
+        payments: true;
+      };
+    }>[],
+  ): Promise<ExamineeListRow[]> {
+    const regIds = rows.map((r) => r.id);
+    const sessions =
+      regIds.length === 0
+        ? []
+        : await this.prisma.examSession.findMany({
+            where: { registrationId: { in: regIds } },
+            orderBy: [{ attemptNo: 'desc' }, { createdAt: 'desc' }],
+          });
     const sessionByReg = new Map<string, (typeof sessions)[number]>();
     for (const s of sessions) {
       if (!s.registrationId) continue;
-      // First entry wins because we ordered by attemptNo desc → that's the latest.
       if (!sessionByReg.has(s.registrationId)) {
         sessionByReg.set(s.registrationId, s);
       }
     }
 
-    // Bulk certificate lookup by sessionId. Uses raw query because the
-    // certificates table is managed by CertificatesService.
     const sessionIds = sessions.map((s) => s.id);
     const certifiedSessionIds = sessionIds.length
       ? await this.fetchCertifiedSessionIds(sessionIds)
       : new Set<string>();
 
-    let mapped: ExamineeListRow[] = rows.map((r) =>
+    return rows.map((r) =>
       this.toExamineeRow(r, sessionByReg.get(r.id) ?? null, certifiedSessionIds),
     );
+  }
 
-    if (isPostFilterStatus && wantedStatus) {
-      mapped = mapped.filter((row) => row.examineeStatus === wantedStatus);
-    }
-
-    if (isPostFilterStatus) {
-      const total = mapped.length;
-      const start = (page - 1) * limit;
-      const items = mapped.slice(start, start + limit);
-      return { items, total, page, limit };
-    }
-
-    return { items: mapped, total: totalAtDb, page, limit };
+  private fmtExportDate(iso: string | Date): string {
+    const d = typeof iso === 'string' ? new Date(iso) : iso;
+    if (Number.isNaN(d.getTime())) return '—';
+    return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
   }
 
   async getExamineeDetail(userId: string): Promise<ExamineeDetail> {

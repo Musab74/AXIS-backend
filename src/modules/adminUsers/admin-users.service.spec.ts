@@ -246,7 +246,7 @@ describe('AdminUsersService.listExaminees', () => {
     expect(regFindMany.mock.calls[0][0].skip).toBe(0);
   });
 
-  it('search by name OR phone is forwarded to the user.OR clause', async () => {
+  it('search by name OR phone OR email OR registrationNumber', async () => {
     const { svc, regFindMany, regCount, sessionFindMany } = makeService();
     regFindMany.mockResolvedValue([]);
     regCount.mockResolvedValue(0);
@@ -255,11 +255,25 @@ describe('AdminUsersService.listExaminees', () => {
     await svc.listExaminees({ q: '010-1234' });
 
     const where = regFindMany.mock.calls[0][0].where;
-    expect(where.user).toEqual({
-      OR: [
-        { name: { contains: '010-1234' } },
-        { phone: { contains: '010-1234' } },
-      ],
+    expect(where.OR).toEqual([
+      { user: { name: { contains: '010-1234' } } },
+      { user: { phone: { contains: '010-1234' } } },
+      { user: { email: { contains: '010-1234' } } },
+      { registrationNumber: { contains: '010-1234' } },
+    ]);
+  });
+
+  it('paymentStatus=CONFIRMED maps to PAID + EXAM_COMPLETED', async () => {
+    const { svc, regFindMany, regCount, sessionFindMany } = makeService();
+    regFindMany.mockResolvedValue([]);
+    regCount.mockResolvedValue(0);
+    sessionFindMany.mockResolvedValue([]);
+
+    await svc.listExaminees({ paymentStatus: 'CONFIRMED' });
+
+    const where = regFindMany.mock.calls[0][0].where;
+    expect(where.status).toEqual({
+      in: [RegistrationStatus.PAID, RegistrationStatus.EXAM_COMPLETED],
     });
   });
 

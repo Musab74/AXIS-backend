@@ -30,8 +30,16 @@ export const ExamineeStatusValues = [
 ] as const;
 export type ExamineeStatus = (typeof ExamineeStatusValues)[number];
 
+/**
+ * Payment-oriented filters for the Registrations & Payments admin page.
+ * Mapped to registration.status groups (not raw PaymentStatus rows) so
+ * cancelled+pending-VBANK rows do not appear under "결제 대기".
+ */
+export const PaymentStatusFilterValues = ['PENDING', 'CONFIRMED', 'REFUNDED'] as const;
+export type PaymentStatusFilter = (typeof PaymentStatusFilterValues)[number];
+
 export class SearchExamineesDto {
-  /** Free-text search against user name OR phone (contains, case-sensitive in MySQL utf8mb4_unicode_ci → effectively CI). */
+  /** Free-text search: name, phone, email, or registration number (contains). */
   @IsOptional()
   @IsString()
   q?: string;
@@ -39,6 +47,11 @@ export class SearchExamineesDto {
   @IsOptional()
   @IsEnum(ExamineeStatusValues)
   status?: ExamineeStatus;
+
+  /** Prefer this over `status` on the registrations/payments screen. */
+  @IsOptional()
+  @IsEnum(PaymentStatusFilterValues)
+  paymentStatus?: PaymentStatusFilter;
 
   @IsOptional()
   @IsEnum(CertType)

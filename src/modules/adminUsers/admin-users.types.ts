@@ -161,11 +161,19 @@ export interface ExamineeListRow {
   refundable: boolean;
 }
 
+/** Aggregate counts for the registrations KPI strip (scoped to q/cert/level only). */
+export interface ExamineeListCounts {
+  pending: number;
+  paid: number;
+  refunded: number;
+}
+
 export interface ExamineeListResult {
   items: ExamineeListRow[];
   total: number;
   page: number;
   limit: number;
+  counts?: ExamineeListCounts;
 }
 
 export interface ExamineeRegistrationDetail {

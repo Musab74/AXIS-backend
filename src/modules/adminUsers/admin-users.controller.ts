@@ -7,10 +7,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
 import { AuthenticatedUser } from '../../common/types/authenticated-user';
@@ -195,6 +196,17 @@ export class AdminExamineesController {
   })
   list(@Query() dto: SearchExamineesDto): Promise<ExamineeListResult> {
     return this.adminUsersService.listExaminees(dto);
+  }
+
+  @Get('export')
+  @Roles('SUPER_ADMIN', 'EXAM_ADMIN')
+  @ApiOperation({ summary: '관리자: 접수·결제 목록 Excel 다운로드' })
+  async export(@Query() dto: SearchExamineesDto, @Res() res: Response): Promise<void> {
+    const file = await this.adminUsersService.exportExaminees(dto);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    res.setHeader('Content-Length', file.buffer.length);
+    res.end(file.buffer);
   }
 
   @Get(':userId')
