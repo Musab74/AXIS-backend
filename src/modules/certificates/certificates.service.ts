@@ -223,6 +223,7 @@ export class CertificatesService {
               select: {
                 year: true,
                 roundNumber: true,
+                resultsAnnouncedAt: true,
               },
             },
           },
@@ -236,6 +237,10 @@ export class CertificatesService {
       (registration.status === RegistrationStatus.REFUNDED ||
         registration.status === RegistrationStatus.CANCELLED)
     ) {
+      return null;
+    }
+    // Certificates are only issued after the round is officially announced.
+    if (!registration?.schedule?.resultsAnnouncedAt) {
       return null;
     }
 

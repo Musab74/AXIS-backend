@@ -28,6 +28,7 @@ import {
 } from '../cbtSessions/exam-spec';
 import { CertificatesService, IssuedCertificate } from '../certificates/certificates.service';
 import { CbtSessionsService } from '../cbtSessions/cbt-sessions.service';
+import { AdminNotificationsService } from '../adminNotifications/admin-notifications.service';
 import { FinalizeSessionDto } from './dto/finalize-session.dto';
 import { ExpertScoreDto } from './dto/expert-score.dto';
 import { GRADING_CONFIG } from './grading-config';
@@ -138,6 +139,7 @@ export class AdminGradingService {
     private readonly ncp: NcObjectStorageService,
     private readonly config: ConfigService,
     private readonly aggregates: SessionAggregateService,
+    private readonly notifications: AdminNotificationsService,
   ) {}
 
   /** Grading queue scope — `null` means all cert series (admins + unscoped experts). */
@@ -171,19 +173,24 @@ export class AdminGradingService {
     const isExpertOnly = this.isExpertOnlyViewer(viewer);
     const sessions = await this.prisma.examSession.findMany({
       where: {
-        // Force-terminated (unfinished) sessions surface in the ADMIN queue so
-        // their saved answers can be graded on demand ("Grade the exam").
-        // Experts never see them — expert scoring requires SUBMITTED anyway.
+        // Force-terminated (unfinished/cheating) sessions surface in BOTH the
+        // admin and expert queues so a reviewer can inspect the saved answers +
+        // proctoring evidence and make a pass/fail call (see reviewTerminated).
         status: {
-          in: isExpertOnly
-            ? [ExamSessionStatus.SUBMITTED, ExamSessionStatus.GRADED]
-            : [ExamSessionStatus.SUBMITTED, ExamSessionStatus.GRADED, ExamSessionStatus.TERMINATED],
+          in: [
+            ExamSessionStatus.SUBMITTED,
+            ExamSessionStatus.GRADED,
+            ExamSessionStatus.TERMINATED,
+          ],
         },
         ...(allowed ? { certType: { in: allowed } } : {}),
-        // Experts grade any session that HAS a practical section. That is every
-        // L1/L2 and — when L3_PRACTICALS_ENABLED — L3-with-practicals too. Legacy
-        // MCQ-only L3 (auto-graded at submit, no essay rows) is excluded.
-        ...(isExpertOnly ? { essayAnswers: { some: {} } } : {}),
+        // Experts grade any session that HAS a practical section (every L1/L2 and
+        // — when L3_PRACTICALS_ENABLED — L3-with-practicals). Legacy MCQ-only L3
+        // is excluded. Terminated sessions are exempt from this filter so even a
+        // terminated MCQ-only exam still reaches the expert for a pass/fail call.
+        ...(isExpertOnly
+          ? { OR: [{ essayAnswers: { some: {} } }, { status: ExamSessionStatus.TERMINATED }] }
+          : {}),
       },
       include: {
         user: { select: { name: true } },
@@ -484,6 +491,20 @@ export class AdminGradingService {
           e.eventType === 'PHONE_DETECTED',
       );
 
+    const scoringRecords = await this.prisma.expertScoringRecord.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const raterIds = [...new Set(scoringRecords.map((r) => r.raterId))];
+    const raters =
+      raterIds.length > 0
+        ? await this.prisma.user.findMany({
+            where: { id: { in: raterIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const raterNameById = new Map(raters.map((u) => [u.id, u.name]));
+
     return {
       sessionId: session.id,
       candidate: session.user.name,
@@ -561,6 +582,18 @@ export class AdminGradingService {
           expertNotes: parsedNotes.notes || null,
         };
       }),
+      scoringHistory: scoringRecords.map((r) => ({
+        id: r.id,
+        taskId: r.taskId,
+        taskTitle: taskById.get(r.taskId)?.title ?? r.taskId,
+        scoringRound: r.scoringRound,
+        total: r.total,
+        raterId: r.raterId,
+        raterName: raterNameById.get(r.raterId) ?? r.raterId,
+        confidenceComment: r.confidenceComment,
+        finalDecision: r.finalDecision,
+        createdAt: r.createdAt.toISOString(),
+      })),
     };
   }
 
@@ -1423,6 +1456,127 @@ export class AdminGradingService {
    * v2.0 (WP4): invalidate a session (부정행위 등) — terminal decision state.
    * Never issues a certificate; requires an explicit reason for the audit trail.
    */
+  /**
+   * Expert/admin pass-fail decision on a force-terminated (cheating/unfinished)
+   * exam. The saved answers are preserved and the MCQ section was already
+   * auto-graded at termination; here the reviewer, after inspecting the answers
+   * and the proctoring evidence, makes the final call:
+   *   - `pass` → CONFIRMED_PASS, keeps the auto-graded total, issues a certificate.
+   *   - `fail` → CONFIRMED_FAIL, no certificate.
+   *
+   * The session flips TERMINATED → GRADED so the result flows into the normal
+   * results/publish path, while `proctorWarnings` stays put as the record that
+   * this exam was force-terminated. Reuses existing enum values only — no schema
+   * change.
+   */
+  async reviewTerminatedSession(
+    actorId: string,
+    actorRoles: string[],
+    sessionId: string,
+    decision: 'pass' | 'fail',
+    note?: string,
+  ): Promise<{
+    sessionId: string;
+    passed: boolean;
+    totalScore: number | null;
+    certificate: IssuedCertificate | null;
+  }> {
+    if (decision !== 'pass' && decision !== 'fail') {
+      throw new BadRequestException("decision must be either 'pass' or 'fail'.");
+    }
+    const session = await this.prisma.examSession.findUnique({ where: { id: sessionId } });
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.status !== ExamSessionStatus.TERMINATED) {
+      throw new ConflictException(
+        `Only TERMINATED sessions can be reviewed here — this session is ${session.status}.`,
+      );
+    }
+    await this.assertWithinCertScope(actorId, actorRoles, session.certType);
+
+    const passed = decision === 'pass';
+    // Keep the auto-graded MCQ number visible on a pass; a fail carries none.
+    const totalScore = passed
+      ? session.totalScore ?? session.writtenScore ?? 0
+      : session.totalScore ?? null;
+    const trimmedNote = note?.trim();
+    const failReason = passed
+      ? null
+      : `강제 종료된 시험 — 채점위원 불합격 판정.${trimmedNote ? ` (${trimmedNote})` : ''}`;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.examSession.update({
+        where: { id: sessionId },
+        data: {
+          status: ExamSessionStatus.GRADED,
+          passed,
+          totalScore,
+          failReason,
+          decisionStatus: passed ? DecisionStatus.CONFIRMED_PASS : DecisionStatus.CONFIRMED_FAIL,
+          confirmedAt: new Date(),
+          confirmedByRef: actorId,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'TERMINATED_REVIEW_DECISION',
+          entityType: 'ExamSession',
+          entityId: sessionId,
+          after: {
+            decision,
+            passed,
+            totalScore,
+            previousStatus: session.status,
+          } as Prisma.InputJsonValue,
+          reason: trimmedNote ?? null,
+        },
+      });
+    });
+
+    let certificate: IssuedCertificate | null = null;
+    if (passed) {
+      try {
+        certificate = await this.certificates.issueForSession(sessionId);
+      } catch (err) {
+        this.logger.error(
+          `Certificate issuance failed for terminated session ${sessionId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    void this.cbtSessions.closeRegistrationIfFinished(
+      session.registrationId ?? null,
+      sessionId,
+      'finalize',
+    );
+    this.aggregates.rebuildSafely(sessionId, 'terminated_review');
+
+    const examName = `${session.certType.replace('_', '-')} ${session.level}`;
+    void this.notifications.notify({
+      category: 'GRADING',
+      titleKo: '강제 종료 시험 판정 완료',
+      titleEn: 'Terminated exam reviewed',
+      bodyKo: `${examName} — 강제 종료된 시험이 ${passed ? '합격' : '불합격'}으로 판정되었습니다.`,
+      bodyEn: `${examName} — a force-terminated exam was reviewed as ${passed ? 'PASS' : 'FAIL'}.`,
+      severity: 'INFO',
+      href: '/grading',
+      meta: { sessionId, decision },
+    });
+
+    this.logger.log(
+      JSON.stringify({
+        msg: 'terminated_review_decision',
+        actorId,
+        sessionId,
+        decision,
+        passed,
+        totalScore,
+        certNumber: certificate?.certNumber ?? null,
+      }),
+    );
+    return { sessionId, passed, totalScore, certificate };
+  }
+
   async invalidateDecision(actorId: string, sessionId: string, reason: string) {
     if (!reason?.trim()) throw new BadRequestException('An invalidation reason is required.');
     const session = await this.prisma.examSession.findUnique({ where: { id: sessionId } });

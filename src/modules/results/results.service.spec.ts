@@ -177,3 +177,51 @@ describe('ResultsService.listPublicRounds', () => {
     );
   });
 });
+
+describe('ResultsService.publicLookup', () => {
+  const prisma = {
+    registration: { findUnique: jest.fn() },
+    examSession: { findFirst: jest.fn() },
+  };
+
+  function svc() {
+    return new ResultsService(prisma as never, {} as never);
+  }
+
+  const announcedAt = new Date('2026-07-10T09:00:00Z');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns cutScore from session spec (v3.0 → 60)', async () => {
+    prisma.registration.findUnique.mockResolvedValue({
+      status: 'PAID',
+      certType: CertType.AXIS,
+      level: CertLevel.L3,
+      user: { name: 'Hong Gildong', birthDate: '19900101' },
+      schedule: {
+        status: ScheduleStatus.COMPLETED,
+        resultsAnnouncedAt: announcedAt,
+        roundNumber: 1,
+        examDate: new Date('2026-07-01'),
+      },
+    });
+    prisma.examSession.findFirst.mockResolvedValue({
+      passed: true,
+      totalScore: 72,
+      certType: CertType.AXIS,
+      level: CertLevel.L3,
+      specVersion: '3.0',
+      gradingResults: [],
+    });
+
+    const res = await svc().publicLookup({
+      registrationNumber: 'AXIS-2026-L3-001-0001',
+      name: 'Hong Gildong',
+      birthDate: '1990-01-01',
+    });
+
+    expect(res).toMatchObject({ status: 'RESULT', cutScore: 60 });
+  });
+});

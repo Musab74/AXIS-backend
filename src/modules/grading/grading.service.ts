@@ -317,18 +317,42 @@ export class GradingService {
     });
     if (!session) throw new NotFoundException();
     if (session.userId !== userId) throw new ForbiddenException();
+
+    let announced = false;
+    if (session.registrationId) {
+      const reg = await this.prisma.registration.findUnique({
+        where: { id: session.registrationId },
+        select: { schedule: { select: { resultsAnnouncedAt: true } } },
+      });
+      announced = !!reg?.schedule.resultsAnnouncedAt;
+    }
+
+    const graded = session.status === ExamSessionStatus.GRADED;
+    const showScores = graded && announced;
+    const practicalPending = session.passed === null;
+    const allowWrittenOnly =
+      !showScores &&
+      practicalPending &&
+      (session.status === ExamSessionStatus.SUBMITTED ||
+        session.status === ExamSessionStatus.GRADED);
+
     return {
       id: session.id,
       certType: session.certType,
       level: session.level,
       status: session.status,
       submittedAt: session.submittedAt,
-      writtenScore: session.writtenScore,
-      practicalScore: session.practicalScore,
-      totalScore: session.totalScore,
-      passed: session.passed,
-      failReason: session.failReason,
-      breakdown: session.gradingResults,
+      writtenScore: showScores || allowWrittenOnly ? session.writtenScore : null,
+      practicalScore: showScores ? session.practicalScore : null,
+      totalScore: showScores ? session.totalScore : null,
+      passed: showScores ? session.passed : null,
+      failReason: showScores ? session.failReason : null,
+      breakdown: showScores
+        ? session.gradingResults
+        : allowWrittenOnly
+          ? session.gradingResults.filter((r) => r.part === ExamPart.WRITTEN)
+          : [],
+      announced,
       // L3 with the 실습형 wire-up active also waits on expert review now, so
       // surface the same ETA hint we show L1/L2 candidates when passed is still
       // pending. Sessions on the legacy MCQ-only L3 path land as GRADED and

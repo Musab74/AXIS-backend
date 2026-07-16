@@ -11,6 +11,7 @@ import {
   ScheduleStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
+import { getScoring, toSpecVersion } from '../cbtSessions/exam-spec';
 import { CertificatesService } from '../certificates/certificates.service';
 
 export type PublicRoundStatusFilter = 'announced' | 'grading' | 'upcoming';
@@ -82,6 +83,7 @@ export class ResultsService {
         startedAt: s.startedAt,
         gradedAt: graded ? s.updatedAt : null,
         announced,
+        announcedAt: reg?.schedule.resultsAnnouncedAt ?? null,
         writtenScore: showScores ? s.writtenScore : null,
         practicalScore: showScores ? s.practicalScore : null,
         totalScore: showScores ? s.totalScore : null,
@@ -362,7 +364,11 @@ export class ResultsService {
       status: 'RESULT' as const,
       passed: session.passed === true,
       totalScore: session.totalScore,
-      cutScore: 70,
+      cutScore: getScoring(
+        session.certType,
+        session.level,
+        toSpecVersion(session.specVersion),
+      ).passTotal,
       certType: reg.certType,
       level: reg.level,
       roundNumber: reg.schedule.roundNumber,
