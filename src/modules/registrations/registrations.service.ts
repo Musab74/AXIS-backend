@@ -1103,33 +1103,12 @@ export class RegistrationsService {
       confirmedPayment.paymentKey &&
       !isDemoPaymentKey(confirmedPayment.paymentKey)
     ) {
-      const needsRefundAccount =
-        confirmedPayment.method === PaymentMethod.VBANK ||
-        confirmedPayment.method === PaymentMethod.TRANSFER;
-      const refundAccount = dto.refundAccount
-        ? {
-            bank: dto.refundAccount.bank.trim(),
-            // Digits only — PortOne rejects hyphenated account numbers.
-            number: dto.refundAccount.number.replace(/\D+/g, ''),
-            holderName: dto.refundAccount.holderName.trim(),
-            ...(dto.refundAccount.holderPhoneNumber?.trim()
-              ? { holderPhoneNumber: dto.refundAccount.holderPhoneNumber.trim() }
-              : {}),
-          }
-        : undefined;
-      if (
-        needsRefundAccount &&
-        (!refundAccount?.bank || !refundAccount.number || !refundAccount.holderName)
-      ) {
-        throw new BadRequestException(
-          'Virtual-account refunds require refund bank, account number, and holder name.',
-        );
-      }
+      // VBANK/TRANSFER refund-account payload is a separate incomplete change;
+      // keep cancelPayment on the stable 3-arg contract so production builds.
       await this.portoneGateway.cancelPayment(
         confirmedPayment.paymentKey,
         `[ADMIN:${actor.id}] ${reason}`,
         refundAmount,
-        refundAccount,
       );
     }
 
